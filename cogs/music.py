@@ -303,7 +303,7 @@ class Music(commands.Cog):
         log.info(f"Sending voice update: endpoint={clean_endpoint} channel={channel_id}")
         result = await lavalink_request(
             "PATCH", f"/v4/sessions/{self.session_id}/players/{guild_id}",
-            json={"voice": {"token": token, "endpoint": clean_endpoint, "sessionId": session_id}},
+            json={"voice": {"token": token, "endpoint": clean_endpoint, "sessionId": session_id, "channelId": str(channel_id) if channel_id else None}},
             params={"noReplace": "false", "trace": "true"}
         )
         log.info(f"Voice update result: {result}")
