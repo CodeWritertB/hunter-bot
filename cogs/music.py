@@ -296,15 +296,12 @@ class Music(commands.Cog):
         log.info(f"Voice update guild={guild_id} token={bool(token)} endpoint={bool(endpoint)} session={bool(session_id)}")
         if not all([token, endpoint, session_id]):
             return
-        # Сначала создаём плеер если не существует
-        await lavalink_request(
-            "PATCH", f"/v4/sessions/{self.session_id}/players/{guild_id}",
-            json={"noReplace": False}
-        )
+        # Убираем порт из endpoint если есть (Lavalink ожидает только хост)
+        clean_endpoint = endpoint.split(":")[0] if ":" in endpoint else endpoint
         # Отправляем voice данные в Lavalink
         result = await lavalink_request(
             "PATCH", f"/v4/sessions/{self.session_id}/players/{guild_id}",
-            json={"voice": {"token": token, "endpoint": endpoint, "sessionId": session_id}}
+            json={"voice": {"token": token, "endpoint": clean_endpoint, "sessionId": session_id}}
         )
         log.info(f"Voice update result: {result}")
         if result is None:
