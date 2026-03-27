@@ -296,6 +296,11 @@ class Music(commands.Cog):
         log.info(f"Voice update guild={guild_id} token={bool(token)} endpoint={bool(endpoint)} session={bool(session_id)}")
         if not all([token, endpoint, session_id]):
             return
+        # Сначала создаём плеер если не существует
+        await lavalink_request(
+            "PATCH", f"/v4/sessions/{self.session_id}/players/{guild_id}",
+            json={"noReplace": False}
+        )
         # Отправляем voice данные в Lavalink
         result = await lavalink_request(
             "PATCH", f"/v4/sessions/{self.session_id}/players/{guild_id}",
