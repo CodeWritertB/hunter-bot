@@ -156,7 +156,11 @@ class MusicView(disnake.ui.View):
         player.current = None
         player.position = 0
         await lavalink_request("DELETE", f"/v4/sessions/{music_cog_session}/players/{self.guild_id}")
-        await inter.guild._state.ws.voice_state(self.guild_id, None)
+        # Отключаемся от войса через Discord gateway
+        await inter.bot.ws.send_as_json({
+            "op": 4,
+            "d": {"guild_id": str(self.guild_id), "channel_id": None, "self_mute": False, "self_deaf": False}
+        })
         await inter.response.edit_message(embed=build_embed(player), view=None)
 
 
@@ -326,7 +330,10 @@ class Music(commands.Cog):
         player = get_player(inter.guild.id)
         player.session_id = self.session_id
 
-        await self.bot.ws.voice_state(inter.guild.id, inter.author.voice.channel.id, self_mute=False, self_deaf=False)
+        await self.bot.ws.send_as_json({
+            "op": 4,
+            "d": {"guild_id": str(inter.guild.id), "channel_id": str(inter.author.voice.channel.id), "self_mute": False, "self_deaf": False}
+        })
 
         if not player.current:
             player.current = track
