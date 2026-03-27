@@ -24,7 +24,7 @@ logging.getLogger("disnake.voice_client").setLevel(logging.WARNING)
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 # Создаём бота только с поддержкой slash-команд
-bot = commands.InteractionBot(intents=disnake.Intents.all())
+bot = commands.InteractionBot(intents=disnake.Intents.all(), enable_debug_events=True)
 
 # Загружаем все модули (cogs)
 bot.load_extension("cogs.members")      # Оповещения о входе/выходе
