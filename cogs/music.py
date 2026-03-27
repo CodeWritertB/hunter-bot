@@ -288,11 +288,14 @@ class Music(commands.Cog):
         log.info(f"Voice update guild={guild_id} token={bool(token)} endpoint={bool(endpoint)} session={bool(session_id)}")
         if not all([token, endpoint, session_id]):
             return
+        # Отправляем voice данные в Lavalink
         result = await lavalink_request(
             "PATCH", f"/v4/sessions/{self.session_id}/players/{guild_id}",
             json={"voice": {"token": token, "endpoint": endpoint, "sessionId": session_id}}
         )
         log.info(f"Voice update result: {result}")
+        # Ждём подключения Lavalink к войсу перед запуском трека
+        await asyncio.sleep(1)
         pending = getattr(player, "_pending_track", None)
         if pending:
             player._pending_track = None
