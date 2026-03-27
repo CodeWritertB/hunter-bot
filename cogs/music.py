@@ -55,11 +55,16 @@ def get_player(guild_id: int) -> MusicPlayer:
 async def lavalink_request(method: str, path: str, **kwargs):
     async with aiohttp.ClientSession() as session:
         async with session.request(method, f"{LAVALINK_BASE}{path}", headers=LAVALINK_HEADERS, **kwargs) as r:
-            log.debug(f"Lavalink {method} {path} -> {r.status}")
-            try:
-                return await r.json() if r.status in (200, 204) else None
-            except Exception:
-                return None
+            text = await r.text()
+            log.debug(f"Lavalink {method} {path} -> {r.status}: {text[:200]}")
+            if r.status in (200, 204):
+                try:
+                    import json as _json
+                    return _json.loads(text) if text else None
+                except Exception:
+                    return None
+            log.warning(f"Lavalink error {r.status}: {text[:200]}")
+            return None
 
 
 async def search_track(query: str) -> dict | None:
@@ -297,6 +302,13 @@ class Music(commands.Cog):
             json={"voice": {"token": token, "endpoint": endpoint, "sessionId": session_id}}
         )
         log.info(f"Voice update result: {result}")
+        if result is None:
+            return  # Lavalink не принял — не запускаем трек
+        # Сбрасываем чтобы повторный вызов не перезаписал
+        player._voice_token = None
+        player._voice_endpoint = None
+        # Ждём подключения Lavalink к войсу
+        await asyncio.sleep(1)
         pending = getattr(player, "_pending_track", None)
         if pending:
             player._pending_track = None
