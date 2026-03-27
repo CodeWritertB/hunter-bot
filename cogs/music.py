@@ -133,15 +133,9 @@ class MusicView(disnake.ui.View):
         player = get_player(self.guild_id)
         player.queue.clear()
         player.current = None
-        async with aiohttp.ClientSession() as session:
-            await session.delete(
-                f"{LAVALINK_BASE}/v4/sessions/{player.session_id}/players/{self.guild_id}",
-                headers=LAVALINK_HEADERS,
-            )
-        # Отключаемся от войса
-        vc = inter.guild.voice_client
-        if vc:
-            await vc.disconnect()
+        await lavalink_request("DELETE", f"/v4/sessions/{music_cog_session}/players/{self.guild_id}")
+        # Отключаемся через gateway без VoiceClient
+        await inter.guild._state.ws.voice_state(self.guild_id, None)
         await inter.response.edit_message(embed=build_embed(player), view=None)
 
 
@@ -252,34 +246,17 @@ class Music(commands.Cog):
         player.session_id = self.session_id
         player.voice_channel = inter.author.voice.channel
 
-        # Подключаемся к войсу если ещё не подключены
-        vc = inter.guild.voice_client
-        if not vc:
-            vc = await inter.author.voice.channel.connect()
-
-        # Отправляем voice update в Lavalink
-        async with aiohttp.ClientSession() as session:
-            await session.patch(
-                f"{LAVALINK_BASE}/v4/sessions/{self.session_id}/players/{inter.guild.id}",
-                headers=LAVALINK_HEADERS,
-                json={
-                    "voice": {
-                        "token": vc.token if hasattr(vc, 'token') else "",
-                        "endpoint": vc.endpoint if hasattr(vc, 'endpoint') else "",
-                        "sessionId": vc.session_id if hasattr(vc, 'session_id') else "",
-                    }
-                }
-            )
+        # Отправляем voice state через gateway напрямую — без создания VoiceClient
+        await self.bot.ws.voice_state(
+            inter.guild.id,
+            inter.author.voice.channel.id,
+            self_mute=False,
+            self_deaf=False
+        )
 
         if not player.current:
-            # Начинаем воспроизведение
             player.current = track
-            async with aiohttp.ClientSession() as session:
-                await session.patch(
-                    f"{LAVALINK_BASE}/v4/sessions/{self.session_id}/players/{inter.guild.id}",
-                    headers=LAVALINK_HEADERS,
-                    json={"track": {"encoded": track.get("encoded")}}
-                )
+            player._pending_track = track  # запустится после voice update
         else:
             player.queue.append(track)
 
@@ -297,6 +274,56 @@ class Music(commands.Cog):
             embed=build_embed(player),
             view=MusicView(inter.guild.id)
         )
+
+
+    @commands.Cog.listener()
+    async def on_socket_raw_receive(self, msg: str):
+        """Перехватывает VOICE_STATE_UPDATE и VOICE_SERVER_UPDATE для передачи в Lavalink."""
+        import json
+        try:
+            data = json.loads(msg)
+        except Exception:
+            return
+        t = data.get("t")
+        d = data.get("d") or {}
+        if not self.session_id:
+            return
+        guild_id = int(d.get("guild_id", 0) or 0)
+        if not guild_id:
+            return
+        player = players.get(guild_id)
+        if not player:
+            return
+
+        if t == "VOICE_STATE_UPDATE" and str(d.get("user_id")) == str(self.bot.user.id):
+            player._voice_session_id = d.get("session_id")
+            await self._send_voice_update(guild_id, player)
+
+        elif t == "VOICE_SERVER_UPDATE":
+            player._voice_token = d.get("token")
+            player._voice_endpoint = d.get("endpoint", "")
+            await self._send_voice_update(guild_id, player)
+
+    async def _send_voice_update(self, guild_id: int, player):
+        """Отправляет voice данные в Lavalink когда оба события получены."""
+        token = getattr(player, "_voice_token", None)
+        endpoint = getattr(player, "_voice_endpoint", None)
+        session_id = getattr(player, "_voice_session_id", None)
+        if not all([token, endpoint, session_id]):
+            return
+        await lavalink_request(
+            "PATCH", f"/v4/sessions/{self.session_id}/players/{guild_id}",
+            json={"voice": {"token": token, "endpoint": endpoint, "sessionId": session_id}}
+        )
+        # Запускаем трек если ожидает
+        pending = getattr(player, "_pending_track", None)
+        if pending:
+            player._pending_track = None
+            await lavalink_request(
+                "PATCH", f"/v4/sessions/{self.session_id}/players/{guild_id}",
+                json={"track": {"encoded": pending.get("encoded")}}
+            )
+            log.info(f"Трек запущен в Lavalink для guild {guild_id}")
 
 
 def setup(bot: commands.InteractionBot):
