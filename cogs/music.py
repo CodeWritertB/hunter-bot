@@ -8,9 +8,9 @@ from db.database import get_music_channel, set_music_channel as db_set_music_cha
 
 log = logging.getLogger("cogs.music")
 
-LAVALINK_HOST = "lava-v4.ajieblogs.eu.org"
-LAVALINK_PORT = 80
-LAVALINK_PASSWORD = "https://dsc.gg/ajidevserver"
+LAVALINK_HOST = "lavalink.jirayu.net"
+LAVALINK_PORT = 13592
+LAVALINK_PASSWORD = "youshallnotpass"
 LAVALINK_SECURE = False
 
 LAVALINK_BASE = f"{'https' if LAVALINK_SECURE else 'http'}://{LAVALINK_HOST}:{LAVALINK_PORT}"
