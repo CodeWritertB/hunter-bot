@@ -238,7 +238,9 @@ class Music(commands.Cog):
             guild_id = int(data.get("guildId", 0))
             player = players.get(guild_id)
             if player:
-                player.position = data.get("state", {}).get("position", 0)
+                state = data.get("state", {})
+                player.position = state.get("position", 0)
+                log.info(f"playerUpdate guild={guild_id} pos={player.position} connected={state.get('connected')}")
 
         elif op == "event":
             event_type = data.get("type")
