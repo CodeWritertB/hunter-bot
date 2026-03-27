@@ -281,19 +281,22 @@ class Music(commands.Cog):
         token = getattr(player, "_voice_token", None)
         endpoint = getattr(player, "_voice_endpoint", None)
         session_id = getattr(player, "_voice_session_id", None)
+        log.info(f"Voice update guild={guild_id} token={bool(token)} endpoint={bool(endpoint)} session={bool(session_id)}")
         if not all([token, endpoint, session_id]):
             return
-        await lavalink_request(
+        result = await lavalink_request(
             "PATCH", f"/v4/sessions/{self.session_id}/players/{guild_id}",
             json={"voice": {"token": token, "endpoint": endpoint, "sessionId": session_id}}
         )
+        log.info(f"Voice update result: {result}")
         pending = getattr(player, "_pending_track", None)
         if pending:
             player._pending_track = None
-            await lavalink_request(
+            result2 = await lavalink_request(
                 "PATCH", f"/v4/sessions/{self.session_id}/players/{guild_id}",
                 json={"track": {"encoded": pending.get("encoded")}}
             )
+            log.info(f"Track start result: {result2}")
             log.info(f"Трек запущен в Lavalink для guild {guild_id}")
 
     @commands.slash_command(
