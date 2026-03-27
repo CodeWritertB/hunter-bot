@@ -55,6 +55,7 @@ def get_player(guild_id: int) -> MusicPlayer:
 async def lavalink_request(method: str, path: str, **kwargs):
     async with aiohttp.ClientSession() as session:
         async with session.request(method, f"{LAVALINK_BASE}{path}", headers=LAVALINK_HEADERS, **kwargs) as r:
+            log.debug(f"Lavalink {method} {path} -> {r.status}")
             try:
                 return await r.json() if r.status in (200, 204) else None
             except Exception:
@@ -275,10 +276,12 @@ class Music(commands.Cog):
             return
         if t == "VOICE_STATE_UPDATE" and str(d.get("user_id")) == str(self.bot.user.id):
             player._voice_session_id = d.get("session_id")
+            log.info(f"VOICE_STATE_UPDATE session={player._voice_session_id}")
             await self._send_voice_update(guild_id, player)
         elif t == "VOICE_SERVER_UPDATE":
             player._voice_token = d.get("token")
             player._voice_endpoint = d.get("endpoint", "")
+            log.info(f"VOICE_SERVER_UPDATE token={bool(player._voice_token)} endpoint={player._voice_endpoint}")
             await self._send_voice_update(guild_id, player)
 
     async def _send_voice_update(self, guild_id: int, player):
@@ -294,8 +297,6 @@ class Music(commands.Cog):
             json={"voice": {"token": token, "endpoint": endpoint, "sessionId": session_id}}
         )
         log.info(f"Voice update result: {result}")
-        # Ждём подключения Lavalink к войсу перед запуском трека
-        await asyncio.sleep(1)
         pending = getattr(player, "_pending_track", None)
         if pending:
             player._pending_track = None
@@ -337,7 +338,6 @@ class Music(commands.Cog):
             "op": 4,
             "d": {"guild_id": str(inter.guild.id), "channel_id": str(inter.author.voice.channel.id), "self_mute": False, "self_deaf": False}
         })
-
         if not player.current:
             player.current = track
             player.position = 0
