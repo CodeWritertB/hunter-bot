@@ -1,0 +1,19 @@
+# Токены и секреты
+.env
+
+# База данных
+*.db
+*.db-shm
+*.db-wal
+backups/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# IDE
+.vscode/
+.idea/
