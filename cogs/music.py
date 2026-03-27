@@ -281,6 +281,7 @@ class Music(commands.Cog):
             return
         if t == "VOICE_STATE_UPDATE" and str(d.get("user_id")) == str(self.bot.user.id):
             player._voice_session_id = d.get("session_id")
+            player._voice_channel_id = d.get("channel_id")
             log.info(f"VOICE_STATE_UPDATE session={player._voice_session_id}")
             await self._send_voice_update(guild_id, player)
         elif t == "VOICE_SERVER_UPDATE":
@@ -298,10 +299,12 @@ class Music(commands.Cog):
             return
         # Убираем порт из endpoint если есть (Lavalink ожидает только хост)
         clean_endpoint = endpoint.split(":")[0] if ":" in endpoint else endpoint
-        # Отправляем voice данные в Lavalink
+        channel_id = getattr(player, "_voice_channel_id", None)
+        log.info(f"Sending voice update: endpoint={clean_endpoint} channel={channel_id}")
         result = await lavalink_request(
             "PATCH", f"/v4/sessions/{self.session_id}/players/{guild_id}",
-            json={"voice": {"token": token, "endpoint": clean_endpoint, "sessionId": session_id}}
+            json={"voice": {"token": token, "endpoint": clean_endpoint, "sessionId": session_id}},
+            params={"noReplace": "false"}
         )
         log.info(f"Voice update result: {result}")
         if result is None:
