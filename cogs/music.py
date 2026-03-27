@@ -63,7 +63,7 @@ async def lavalink_request(method: str, path: str, **kwargs):
                     return _json.loads(text) if text else None
                 except Exception:
                     return None
-            log.warning(f"Lavalink error {r.status}: {text[:200]}")
+            log.warning(f"Lavalink error {r.status}: {text[:500]}")
             return None
 
 
@@ -304,7 +304,7 @@ class Music(commands.Cog):
         result = await lavalink_request(
             "PATCH", f"/v4/sessions/{self.session_id}/players/{guild_id}",
             json={"voice": {"token": token, "endpoint": clean_endpoint, "sessionId": session_id}},
-            params={"noReplace": "false"}
+            params={"noReplace": "false", "trace": "true"}
         )
         log.info(f"Voice update result: {result}")
         if result is None:
