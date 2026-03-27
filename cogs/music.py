@@ -358,6 +358,7 @@ class Music(commands.Cog):
             "op": 4,
             "d": {"guild_id": str(inter.guild.id), "channel_id": str(inter.author.voice.channel.id), "self_mute": False, "self_deaf": False}
         })
+        log.info(f"Sent voice state op:4 to guild={inter.guild.id} channel={inter.author.voice.channel.id}")
         if not player.current:
             player.current = track
             player.position = 0
