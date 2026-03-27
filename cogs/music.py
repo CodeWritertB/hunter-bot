@@ -301,28 +301,31 @@ class Music(commands.Cog):
         clean_endpoint = endpoint.split(":")[0] if ":" in endpoint else endpoint
         channel_id = getattr(player, "_voice_channel_id", None)
         log.info(f"Sending voice update: endpoint={clean_endpoint} channel={channel_id}")
-        result = await lavalink_request(
-            "PATCH", f"/v4/sessions/{self.session_id}/players/{guild_id}",
-            json={"voice": {"token": token, "endpoint": clean_endpoint, "sessionId": session_id, "channelId": str(channel_id) if channel_id else None}},
-            params={"noReplace": "false", "trace": "true"}
-        )
-        log.info(f"Voice update result: {result}")
-        if result is None:
-            return  # Lavalink не принял — не запускаем трек
-        # Сбрасываем чтобы повторный вызов не перезаписал
-        player._voice_token = None
-        player._voice_endpoint = None
-        # Ждём подключения Lavalink к войсу
-        await asyncio.sleep(1)
         pending = getattr(player, "_pending_track", None)
         if pending:
             player._pending_track = None
-            result2 = await lavalink_request(
+            # Отправляем voice + трек одним запросом
+            result = await lavalink_request(
                 "PATCH", f"/v4/sessions/{self.session_id}/players/{guild_id}",
-                json={"track": {"encoded": pending.get("encoded")}}
+                json={
+                    "voice": {"token": token, "endpoint": clean_endpoint, "sessionId": session_id, "channelId": str(channel_id) if channel_id else None},
+                    "track": {"encoded": pending.get("encoded")}
+                },
+                params={"noReplace": "false"}
             )
-            log.info(f"Track start result: {result2}")
-            log.info(f"Трек запущен в Lavalink для guild {guild_id}")
+            log.info(f"Voice+Track result: {result}")
+            if result:
+                log.info(f"Трек запущен в Lavalink для guild {guild_id}")
+        else:
+            # Только voice update без трека
+            result = await lavalink_request(
+                "PATCH", f"/v4/sessions/{self.session_id}/players/{guild_id}",
+                json={"voice": {"token": token, "endpoint": clean_endpoint, "sessionId": session_id, "channelId": str(channel_id) if channel_id else None}},
+                params={"noReplace": "false"}
+            )
+            log.info(f"Voice update result: {result}")
+        player._voice_token = None
+        player._voice_endpoint = None
 
     @commands.slash_command(
         description="Установить канал для музыкального плеера",
