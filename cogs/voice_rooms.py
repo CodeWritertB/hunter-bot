@@ -439,7 +439,7 @@ class VoiceRooms(commands.Cog):
             # Чистим записи старше 2 минут
             recent_members[vc.id] = {uid: t for uid, t in recent_members[vc.id].items() if now_t - t <= 120}
 
-            if len(vc.members) == 0:
+            if len([m for m in vc.members if not m.bot]) == 0:
                 panel_messages.pop(vc.id, None)
                 recent_members.pop(vc.id, None)
                 raise_cooldowns.pop(vc.id, None)
