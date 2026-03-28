@@ -55,15 +55,12 @@ def get_player(guild_id: int) -> MusicPlayer:
 async def lavalink_request(method: str, path: str, **kwargs):
     async with aiohttp.ClientSession() as session:
         async with session.request(method, f"{LAVALINK_BASE}{path}", headers=LAVALINK_HEADERS, **kwargs) as r:
-            text = await r.text()
-            log.debug(f"Lavalink {method} {path} -> {r.status}: {text[:200]}")
             if r.status in (200, 204):
                 try:
-                    import json as _json
-                    return _json.loads(text) if text else None
+                    return await r.json()
                 except Exception:
                     return None
-            log.warning(f"Lavalink error {r.status}: {text[:500]}")
+            log.warning(f"Lavalink {r.status}: {await r.text()}")
             return None
 
 
@@ -238,9 +235,7 @@ class Music(commands.Cog):
             guild_id = int(data.get("guildId", 0))
             player = players.get(guild_id)
             if player:
-                state = data.get("state", {})
-                player.position = state.get("position", 0)
-                log.info(f"playerUpdate guild={guild_id} pos={player.position} connected={state.get('connected')}")
+                player.position = data.get("state", {}).get("position", 0)
 
         elif op == "event":
             event_type = data.get("type")
@@ -284,48 +279,36 @@ class Music(commands.Cog):
         if t == "VOICE_STATE_UPDATE" and str(d.get("user_id")) == str(self.bot.user.id):
             player._voice_session_id = d.get("session_id")
             player._voice_channel_id = d.get("channel_id")
-            log.info(f"VOICE_STATE_UPDATE session={player._voice_session_id}")
             await self._send_voice_update(guild_id, player)
         elif t == "VOICE_SERVER_UPDATE":
             player._voice_token = d.get("token")
             player._voice_endpoint = d.get("endpoint", "")
-            log.info(f"VOICE_SERVER_UPDATE token={bool(player._voice_token)} endpoint={player._voice_endpoint}")
             await self._send_voice_update(guild_id, player)
 
     async def _send_voice_update(self, guild_id: int, player):
         token = getattr(player, "_voice_token", None)
         endpoint = getattr(player, "_voice_endpoint", None)
         session_id = getattr(player, "_voice_session_id", None)
-        log.info(f"Voice update guild={guild_id} token={bool(token)} endpoint={bool(endpoint)} session={bool(session_id)}")
         if not all([token, endpoint, session_id]):
             return
-        # Передаём endpoint как есть — Lavalink сам обрабатывает порт
-        clean_endpoint = endpoint
         channel_id = getattr(player, "_voice_channel_id", None)
-        log.info(f"Sending voice update: endpoint={clean_endpoint} channel={channel_id}")
         pending = getattr(player, "_pending_track", None)
+        voice_data = {"token": token, "endpoint": endpoint, "sessionId": session_id, "channelId": str(channel_id) if channel_id else None}
         if pending:
             player._pending_track = None
-            # Отправляем voice + трек одним запросом
             result = await lavalink_request(
                 "PATCH", f"/v4/sessions/{self.session_id}/players/{guild_id}",
-                json={
-                    "voice": {"token": token, "endpoint": clean_endpoint, "sessionId": session_id, "channelId": str(channel_id) if channel_id else None},
-                    "track": {"encoded": pending.get("encoded")}
-                },
+                json={"voice": voice_data, "track": {"encoded": pending.get("encoded")}},
                 params={"noReplace": "false"}
             )
-            log.info(f"Voice+Track result: {result}")
             if result:
-                log.info(f"Трек запущен в Lavalink для guild {guild_id}")
+                log.info(f"[guild={guild_id}] Трек запущен в Lavalink")
         else:
-            # Только voice update без трека
-            result = await lavalink_request(
+            await lavalink_request(
                 "PATCH", f"/v4/sessions/{self.session_id}/players/{guild_id}",
-                json={"voice": {"token": token, "endpoint": clean_endpoint, "sessionId": session_id, "channelId": str(channel_id) if channel_id else None}},
+                json={"voice": voice_data},
                 params={"noReplace": "false"}
             )
-            log.info(f"Voice update result: {result}")
         player._voice_token = None
         player._voice_endpoint = None
 
@@ -360,7 +343,6 @@ class Music(commands.Cog):
             "op": 4,
             "d": {"guild_id": str(inter.guild.id), "channel_id": str(inter.author.voice.channel.id), "self_mute": False, "self_deaf": False}
         })
-        log.info(f"Sent voice state op:4 to guild={inter.guild.id} channel={inter.author.voice.channel.id}")
         if not player.current:
             player.current = track
             player.position = 0
