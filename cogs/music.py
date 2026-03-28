@@ -183,20 +183,16 @@ class Music(commands.Cog):
         self.update_task.cancel()
 
     async def progress_update_loop(self):
-        """Обновляет прогресс-бар каждые 5 секунд."""
+        """Обновляет прогресс-бар каждые 15 секунд."""
         await self.bot.wait_until_ready()
         while not self.bot.is_closed():
-            await asyncio.sleep(5)
+            await asyncio.sleep(15)
             if not self.session_id:
                 continue
             for guild_id, player in list(players.items()):
                 if not player.current or not player.message or player.paused:
                     continue
                 try:
-                    # Получаем актуальную позицию из Lavalink
-                    data = await lavalink_request("GET", f"/v4/sessions/{self.session_id}/players/{guild_id}")
-                    if data:
-                        player.position = data.get("state", {}).get("position", player.position)
                     view = MusicView(guild_id)
                     await player.message.edit(embed=build_embed(player), view=view)
                 except Exception:
