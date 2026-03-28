@@ -394,6 +394,9 @@ class VoiceRooms(commands.Cog):
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: disnake.Member, before: disnake.VoiceState, after: disnake.VoiceState):
+        # Игнорируем бота
+        if member.bot:
+            return
         guild = member.guild
         lobby_id = get_lobby(guild.id)
 
