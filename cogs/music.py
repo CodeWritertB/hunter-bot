@@ -164,6 +164,10 @@ class MusicView(disnake.ui.View):
             "op": 4,
             "d": {"guild_id": str(self.guild_id), "channel_id": None, "self_mute": False, "self_deaf": False}
         })
+        try:
+            await inter.message.unpin()
+        except Exception:
+            pass
         await inter.response.edit_message(embed=build_embed(player), view=None)
 
 
@@ -288,6 +292,7 @@ class Music(commands.Cog):
             })
             if player.message:
                 try:
+                    await player.message.unpin()
                     await player.message.edit(embed=build_embed(player), view=None)
                 except Exception:
                     pass
@@ -392,6 +397,11 @@ class Music(commands.Cog):
                 pass
 
         player.message = await inter.edit_original_response(embed=build_embed(player), view=MusicView(inter.guild.id))
+        # Закрепляем сообщение плеера
+        try:
+            await player.message.pin()
+        except Exception:
+            pass
 
 
 def setup(bot: commands.InteractionBot):

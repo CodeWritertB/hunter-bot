@@ -93,6 +93,19 @@ class Info(commands.Cog):
 
 
     @commands.slash_command(
+        description="Очистить сообщения в канале",
+        default_member_permissions=disnake.Permissions(administrator=True)
+    )
+    async def clear(self, inter: disnake.ApplicationCommandInteraction, amount: int = 100):
+        """Удаляет до 100 сообщений в текущем канале."""
+        if amount < 1 or amount > 100:
+            return await inter.response.send_message("❌ Укажи число от 1 до 100.", ephemeral=True)
+        await inter.response.defer(ephemeral=True)
+        deleted = await inter.channel.purge(limit=amount)
+        log.info(f"[{inter.guild.name}] {inter.author} очистил {len(deleted)} сообщений в #{inter.channel.name}")
+        await inter.edit_original_response(content=f"✅ Удалено {len(deleted)} сообщений.")
+
+    @commands.slash_command(
         description="Отправить сообщение участнику от имени бота",
         default_member_permissions=disnake.Permissions(administrator=True)
     )
