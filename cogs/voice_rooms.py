@@ -303,8 +303,9 @@ class RoomPanel(disnake.ui.View):
         if not self.check(inter):
             return await inter.response.send_message("❌ Только владелец.", ephemeral=True)
         ow = self.vc.overwrites_for(inter.guild.default_role)
-        currently_denied = ow.stream == False
-        await self.vc.set_permissions(inter.guild.default_role, stream=currently_denied or None)
+        currently_denied = ow.stream is False
+        new_value = None if currently_denied else False
+        await self.vc.set_permissions(inter.guild.default_role, stream=new_value)
         status = "✅ Видео разрешено" if currently_denied else "🚫 Видео запрещено"
         log.info(f"[{inter.guild.name}] '{self.vc.name}' видео: {status} ({inter.author})")
         if msg := panel_messages.get(self.vc.id):
@@ -316,8 +317,10 @@ class RoomPanel(disnake.ui.View):
         if not self.check(inter):
             return await inter.response.send_message("❌ Только владелец.", ephemeral=True)
         ow = self.vc.overwrites_for(inter.guild.default_role)
-        currently_denied = ow.speak == False
-        await self.vc.set_permissions(inter.guild.default_role, speak=currently_denied or None)
+        # None = не установлено (разрешено по умолчанию), False = явно запрещено
+        currently_denied = ow.speak is False
+        new_value = None if currently_denied else False  # toggle
+        await self.vc.set_permissions(inter.guild.default_role, speak=new_value)
         status = "✅ Голос разрешён" if currently_denied else "🚫 Голос запрещён"
         log.info(f"[{inter.guild.name}] '{self.vc.name}' голос: {status} ({inter.author})")
         if msg := panel_messages.get(self.vc.id):
