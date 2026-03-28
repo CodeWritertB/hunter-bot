@@ -299,8 +299,8 @@ class Music(commands.Cog):
         log.info(f"Voice update guild={guild_id} token={bool(token)} endpoint={bool(endpoint)} session={bool(session_id)}")
         if not all([token, endpoint, session_id]):
             return
-        # Убираем порт из endpoint если есть (Lavalink ожидает только хост)
-        clean_endpoint = endpoint.split(":")[0] if ":" in endpoint else endpoint
+        # Передаём endpoint как есть — Lavalink сам обрабатывает порт
+        clean_endpoint = endpoint
         channel_id = getattr(player, "_voice_channel_id", None)
         log.info(f"Sending voice update: endpoint={clean_endpoint} channel={channel_id}")
         pending = getattr(player, "_pending_track", None)
