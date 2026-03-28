@@ -183,10 +183,10 @@ class Music(commands.Cog):
         self.update_task.cancel()
 
     async def progress_update_loop(self):
-        """Обновляет прогресс-бар каждые 15 секунд."""
+        """Обновляет прогресс-бар каждые 10 секунд."""
         await self.bot.wait_until_ready()
         while not self.bot.is_closed():
-            await asyncio.sleep(15)
+            await asyncio.sleep(10)
             if not self.session_id:
                 continue
             for guild_id, player in list(players.items()):
@@ -368,7 +368,13 @@ class Music(commands.Cog):
         await inter.response.defer()
         track = await search_track(query)
         if not track:
-            return await inter.edit_original_response(content="❌ Трек не найден.")
+            msg = await inter.edit_original_response(content="❌ Трек не найден.")
+            await asyncio.sleep(5)
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+            return
 
         player = get_player(inter.guild.id)
         player.session_id = self.session_id
@@ -393,9 +399,14 @@ class Music(commands.Cog):
                 pass
 
         player.message = await inter.edit_original_response(embed=build_embed(player), view=MusicView(inter.guild.id))
-        # Закрепляем сообщение плеера
+        # Закрепляем сообщение плеера и удаляем системное уведомление о закрепе
         try:
             await player.message.pin()
+            # Удаляем системное сообщение "закрепил сообщение"
+            async for msg in inter.channel.history(limit=5):
+                if msg.type == disnake.MessageType.pins_add:
+                    await msg.delete()
+                    break
         except Exception:
             pass
 
