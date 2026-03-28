@@ -62,20 +62,23 @@ async def status_loop():
         # Ищем текущий играющий трек среди всех плееров
         current_track = None
         for player in players.values():
-            if player.current and player.current.get("title"):
-                current_track = player.current["title"]
-                break
+            if player.current and not player.paused:
+                current_track = player.current.get("info", {}).get("title")
+                if current_track:
+                    break
 
-        # Формируем список статусов для чередования
-        statuses = [
-            (disnake.ActivityType.watching, f"{active_rooms} комнат | {people_in_rooms} человек в комнатах"),
-        ]
+        # Если трек играет — показываем его, иначе чередуем статусы
         if current_track:
-            statuses.append((disnake.ActivityType.listening, current_track))
-
-        atype, text = statuses[idx % len(statuses)]
-        await bot.change_presence(activity=disnake.Activity(type=atype, name=text))
-        idx += 1
+            await bot.change_presence(
+                activity=disnake.Activity(type=disnake.ActivityType.listening, name=current_track)
+            )
+        else:
+            statuses = [
+                (disnake.ActivityType.watching, f"{active_rooms} комнат | {people_in_rooms} человек в комнатах"),
+            ]
+            atype, text = statuses[idx % len(statuses)]
+            await bot.change_presence(activity=disnake.Activity(type=atype, name=text))
+            idx += 1
         await asyncio.sleep(15)
 
 
