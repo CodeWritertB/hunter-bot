@@ -261,6 +261,39 @@ class Music(commands.Cog):
                         pass
 
     @commands.Cog.listener()
+    async def on_voice_state_update(self, member: disnake.Member, before: disnake.VoiceState, after: disnake.VoiceState):
+        """Останавливает музыку если в канале никого не осталось."""
+        if member.bot:
+            return
+        if not before.channel:
+            return
+        # Проверяем есть ли плеер для этого сервера
+        player = players.get(member.guild.id)
+        if not player or not player.current:
+            return
+        channel_id = getattr(player, "_voice_channel_id", None)
+        if not channel_id or before.channel.id != int(channel_id):
+            return
+        # Считаем живых участников (не ботов)
+        humans = [m for m in before.channel.members if not m.bot]
+        if len(humans) == 0:
+            player.queue.clear()
+            player.current = None
+            player.position = 0
+            if self.session_id:
+                await lavalink_request("DELETE", f"/v4/sessions/{self.session_id}/players/{member.guild.id}")
+            await self.bot.ws.send_as_json({
+                "op": 4,
+                "d": {"guild_id": str(member.guild.id), "channel_id": None, "self_mute": False, "self_deaf": False}
+            })
+            if player.message:
+                try:
+                    await player.message.edit(embed=build_embed(player), view=None)
+                except Exception:
+                    pass
+            log.info(f"[{member.guild.name}] Канал пуст — музыка остановлена")
+
+    @commands.Cog.listener()
     async def on_socket_raw_receive(self, msg: str):
         try:
             data = json.loads(msg)
