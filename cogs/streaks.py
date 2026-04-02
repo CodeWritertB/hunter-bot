@@ -40,38 +40,21 @@ class Streaks(commands.Cog):
             await self.process_daily_reset()
 
     async def process_daily_reset(self):
+        """В 00:00 сбрасывает стрик тем кто не заходил вчера."""
         today = datetime.now(MSK).date()
         yesterday = (today - timedelta(days=1)).isoformat()
 
         for guild in self.bot.guilds:
-            active_today = voice_today.get(guild.id, set())
             rows = get_all_streaks(guild.id)
-
             for user_id, streak, last_date in rows:
-                member = guild.get_member(user_id)
-                if not member:
-                    continue
-
-                if user_id in active_today:
-                    # Был в войсе сегодня — продолжаем стрик
-                    if last_date == yesterday:
-                        new_streak = streak + 1
-                    else:
-                        new_streak = 1
-                else:
-                    # Не был — сбрасываем
-                    new_streak = 0
-                update_streak(guild.id, user_id, new_streak, today.isoformat())
-                await self.update_nick(member, new_streak)
-                log.info(f"[{guild.name}] Стрик {member}: {streak} -> {new_streak}")
-
-            # Новые участники кто был сегодня но нет в БД
-            for user_id in active_today:
-                if not any(r[0] == user_id for r in rows):
+                # Сбрасываем только тех кто не заходил вчера и не заходил сегодня
+                if last_date != yesterday and last_date != today.isoformat():
                     member = guild.get_member(user_id)
-                    if member:
-                        update_streak(guild.id, user_id, 1, today.isoformat())
-                        await self.update_nick(member, 1)
+                    if not member:
+                        continue
+                    update_streak(guild.id, user_id, 0, today.isoformat())
+                    await self.update_nick(member, 0)
+                    log.info(f"[{guild.name}] Стрик сброшен: {member} (последний заход: {last_date})")
 
             voice_today[guild.id] = set()
 
