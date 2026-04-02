@@ -44,6 +44,9 @@ class MusicPlayer:
 
 
 players: dict[int, MusicPlayer] = {}
+# guild_id -> timestamp когда трек закончился/встал на паузу
+idle_since: dict[int, float] = {}
+IDLE_TIMEOUT = 300  # 5 минут
 
 
 def get_player(guild_id: int) -> MusicPlayer:
@@ -183,14 +186,40 @@ class Music(commands.Cog):
         self.update_task.cancel()
 
     async def progress_update_loop(self):
-        """Обновляет прогресс-бар каждые 10 секунд."""
+        """Обновляет прогресс-бар каждые 10 секунд и отключается при простое 5 минут."""
         await self.bot.wait_until_ready()
         while not self.bot.is_closed():
             await asyncio.sleep(10)
             if not self.session_id:
                 continue
+            now = asyncio.get_event_loop().time()
             for guild_id, player in list(players.items()):
-                if not player.current or not player.message or player.paused:
+                # Отслеживаем простой
+                if not player.current or player.paused:
+                    if guild_id not in idle_since:
+                        idle_since[guild_id] = now
+                    elif now - idle_since[guild_id] >= IDLE_TIMEOUT:
+                        # Тайм-аут — отключаемся
+                        idle_since.pop(guild_id, None)
+                        await lavalink_request("DELETE", f"/v4/sessions/{self.session_id}/players/{guild_id}")
+                        await self.bot.ws.send_as_json({
+                            "op": 4,
+                            "d": {"guild_id": str(guild_id), "channel_id": None, "self_mute": False, "self_deaf": False}
+                        })
+                        if player.message:
+                            try:
+                                await player.message.unpin()
+                                await player.message.edit(embed=build_embed(player), view=None)
+                            except Exception:
+                                pass
+                        player.current = None
+                        player.queue.clear()
+                        log.info(f"[guild={guild_id}] Отключён по тайм-ауту простоя")
+                    continue
+                else:
+                    idle_since.pop(guild_id, None)
+
+                if not player.message:
                     continue
                 try:
                     view = MusicView(guild_id)
@@ -389,6 +418,7 @@ class Music(commands.Cog):
             player._pending_track = track
         else:
             player.queue.append(track)
+        idle_since.pop(inter.guild.id, None)
 
         log.info(f"[{inter.guild.name}] Трек: {track.get('info', {}).get('title')} ({inter.author})")
 

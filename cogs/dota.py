@@ -194,9 +194,16 @@ def build_live_embed(match_id: int, players_info: list, heroes_list: dict) -> di
     mode_name = GAME_MODES.get(game_mode, f"Mode {game_mode}")
     lobby_name = LOBBY_TYPES.get(lobby_type, "")
 
+    # Формируем строку типа игры
+    if game_mode and game_mode != 0:
+        type_str = mode_name
+    elif lobby_type and lobby_type != 0:
+        type_str = lobby_name
+    else:
+        type_str = "Неизвестный режим"
+
     embed = disnake.Embed(
-        title=f"🎮 Активный матч #{match_id}",
-        description=f"**{mode_name}**" + (f" • {lobby_name}" if lobby_name else ""),
+        title=f"🎮 Активный матч #{match_id} • {type_str}",
         color=disnake.Color.yellow(),
         url=f"https://www.dotabuff.com/matches/{match_id}"
     )
@@ -374,31 +381,30 @@ class Dota(commands.Cog):
             steam32 = steam64_to_32(int(steam64))
             member = guild.get_member(user_id)
 
-            # Получаем последний матч
+            # Используем Steam API для быстрого обнаружения нового матча
             try:
                 async with session.get(
-                    f"{OPENDOTA_API}/players/{steam32}/recentMatches",
-                    params={"limit": 1}
+                    f"{STEAM_API}/IDOTA2Match_570/GetMatchHistory/v1/",
+                    params={"key": STEAM_API_KEY, "account_id": steam32, "matches_requested": 1}
                 ) as r:
                     if r.status != 200:
                         continue
-                    recent = await r.json()
-                    if not recent:
+                    data = await r.json()
+                    matches = data.get("result", {}).get("matches", [])
+                    if not matches:
                         continue
-                    last_match = recent[0]
-                    match_id = last_match.get("match_id")
+                    steam_match = matches[0]
+                    match_id = steam_match.get("match_id")
                     if not match_id:
                         continue
+                    match_start = steam_match.get("start_time", 0)
             except Exception:
                 continue
 
             # Новый матч — проверяем что он не слишком старый (не старше 2 часов)
             prev_match_id = active_matches[guild.id].get(steam32)
-            match_start = last_match.get("start_time", 0)
-            match_duration = last_match.get("duration", 0)
-            match_end = match_start + match_duration
             now_ts = _time.time()
-            is_recent = (now_ts - match_end) < 7200  # не старше 2 часов
+            is_recent = (now_ts - match_start) < 7200  # не старше 2 часов
 
             if match_id != prev_match_id and is_recent:
                 active_matches[guild.id][steam32] = match_id
@@ -407,52 +413,48 @@ class Dota(commands.Cog):
                 if match_id in live_messages.get(guild.id, {}):
                     continue
 
-                # Если матч ещё идёт (duration == 0 или start_time близко к now)
-                is_live = match_duration == 0 or (now_ts - match_start) < match_duration + 300
-
-                # Получаем список всех игроков матча
-                try:
-                    async with session.get(f"{OPENDOTA_API}/matches/{match_id}") as mr:
-                        if mr.status != 200:
-                            continue
-                        match_data = await mr.json()
-                        match_players = match_data.get("players", [])
-                        match_steam32_set = {p.get("account_id") for p in match_players if p.get("account_id")}
-                except Exception:
-                    continue
+                # Пробуем получить детали из OpenDota (может ещё не быть если матч только начался)
+                match_data = await get_match_details(session, match_id)
+                match_players = match_data.get("players", []) if match_data else []
+                is_live = not match_data or not match_data.get("duration")
 
                 # Счёт убийств из данных матча
-                radiant_score = match_data.get("radiant_score")
-                dire_score = match_data.get("dire_score")
-                game_mode = match_data.get("game_mode", 0)
-                lobby_type = match_data.get("lobby_type", 0)
+                radiant_score = match_data.get("radiant_score") if match_data else None
+                dire_score = match_data.get("dire_score") if match_data else None
+                game_mode = match_data.get("game_mode", 0) if match_data else 0
+                lobby_type = steam_match.get("lobby_type", match_data.get("lobby_type", 0) if match_data else 0)
 
                 # Строим словарь steam32 -> Discord привязка для быстрого поиска
                 linked_map = {steam64_to_32(int(s64)): (uid, s64) for uid, s64 in links}
 
-                # Собираем все steam64 непривязанных игроков для батчевого запроса
-                unlinked_steam64s = []
-                unlinked_s32s = []
-                for mp in match_players:
-                    s32 = mp.get("account_id")
-                    if s32 and s32 not in linked_map:
-                        unlinked_steam64s.append(str(s32 + 76561197960265728))
-                        unlinked_s32s.append(s32)
+                # Если OpenDota уже вернул данные — берём всех игроков
+                # Если нет — показываем только привязанных
+                if match_players:
+                    unlinked_steam64s = []
+                    unlinked_s32s = []
+                    for mp in match_players:
+                        s32 = mp.get("account_id")
+                        if s32 and s32 not in linked_map:
+                            unlinked_steam64s.append(str(s32 + 76561197960265728))
+                            unlinked_s32s.append(s32)
+                    steam_profiles = await get_steam_profiles_batch(session, unlinked_steam64s)
+                    unlinked_stats = {}
+                    for s32 in unlinked_s32s:
+                        w, l = await get_player_wl(session, s32)
+                        kda = await get_player_kda(session, s32)
+                        top = await get_hero_stats(session, s32)
+                        unlinked_stats[s32] = {"wl": (w, l), "kda": kda, "top_heroes": top}
+                    iter_players = match_players
+                else:
+                    # OpenDota ещё не обработал матч — показываем только привязанных
+                    steam_profiles = {}
+                    unlinked_stats = {}
+                    iter_players = [{"account_id": steam64_to_32(int(s64)), "hero_id": 0, "player_slot": 0}
+                                    for _, s64 in links]
 
-                # Один запрос для всех профилей Steam
-                steam_profiles = await get_steam_profiles_batch(session, unlinked_steam64s)
-
-                # Параллельно получаем WR и KDA для непривязанных
-                unlinked_stats = {}
-                for s32 in unlinked_s32s:
-                    w, l = await get_player_wl(session, s32)
-                    kda = await get_player_kda(session, s32)
-                    top = await get_hero_stats(session, s32)
-                    unlinked_stats[s32] = {"wl": (w, l), "kda": kda, "top_heroes": top}
-
-                # Собираем инфу по ВСЕМ 10 игрокам матча
+                # Собираем инфу по игрокам матча
                 players_info = []
-                for mp in match_players:
+                for mp in iter_players:
                     s32 = mp.get("account_id")
                     hero_id = mp.get("hero_id", 0)
                     slot = mp.get("player_slot", 0)
@@ -603,6 +605,8 @@ class Dota(commands.Cog):
 
     @commands.slash_command(description="Привязать Steam аккаунт")
     async def link_steam(self, inter: disnake.ApplicationCommandInteraction, steam: str):
+        if not STEAM_API_KEY:
+            return await inter.response.send_message("❌ Steam API ключ не настроен.", ephemeral=True)
         await inter.response.defer(ephemeral=True)
         async with aiohttp.ClientSession() as session:
             steam64 = resolve_steam_id(steam)

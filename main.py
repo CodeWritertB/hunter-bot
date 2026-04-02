@@ -2,23 +2,53 @@ import disnake
 import os
 import logging
 import asyncio
+from logging.handlers import RotatingFileHandler
+from datetime import datetime
 from dotenv import load_dotenv
 from disnake.ext import commands
 
 # Настройка логирования в консоль
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.ERROR,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger("bot")
 
-# Глушим лишние логи от disnake — оставляем только WARNING и выше
-logging.getLogger("disnake").setLevel(logging.WARNING)
-logging.getLogger("disnake.gateway").setLevel(logging.WARNING)
-logging.getLogger("disnake.client").setLevel(logging.WARNING)
-logging.getLogger("disnake.http").setLevel(logging.WARNING)
-logging.getLogger("disnake.voice_client").setLevel(logging.WARNING)
+logging.getLogger("disnake").setLevel(logging.ERROR)
+logging.getLogger("disnake.gateway").setLevel(logging.ERROR)
+logging.getLogger("disnake.client").setLevel(logging.ERROR)
+logging.getLogger("disnake.http").setLevel(logging.ERROR)
+logging.getLogger("disnake.voice_client").setLevel(logging.ERROR)
+
+# --- Файловое логирование ---
+_logs_dir = os.path.join(os.path.dirname(__file__), "logs")
+os.makedirs(_logs_dir, exist_ok=True)
+
+_log_date = datetime.now().strftime("%Y-%m-%d")
+_fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+
+# Все логи (INFO и выше) — с ротацией 5MB, 7 файлов
+_all_handler = RotatingFileHandler(
+    os.path.join(_logs_dir, f"bot_{_log_date}.log"),
+    maxBytes=5 * 1024 * 1024, backupCount=7, encoding="utf-8"
+)
+_all_handler.setLevel(logging.INFO)
+_all_handler.setFormatter(_fmt)
+
+# Только ошибки
+_err_handler = RotatingFileHandler(
+    os.path.join(_logs_dir, "errors.log"),
+    maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+)
+_err_handler.setLevel(logging.ERROR)
+_err_handler.setFormatter(_fmt)
+
+# Добавляем хендлеры к корневому логгеру
+_root = logging.getLogger()
+_root.setLevel(logging.INFO)
+_root.addHandler(_all_handler)
+_root.addHandler(_err_handler)
 
 # Загружаем токен из .env файла
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
