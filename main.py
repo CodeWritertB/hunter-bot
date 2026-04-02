@@ -54,7 +54,7 @@ async def status_loop():
 
         # Считаем сколько человек сейчас в приватных комнатах
         people_in_rooms = sum(
-            len(bot.get_channel(cid).members)
+            len([m for m in bot.get_channel(cid).members if not m.bot])
             for cid in panel_messages
             if bot.get_channel(cid)
         ) if panel_messages else 0
