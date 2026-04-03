@@ -197,10 +197,14 @@ def build_live_embed(match_id: int, players_info: list, heroes_list: dict) -> di
     # Формируем строку типа игры
     if game_mode and game_mode != 0:
         type_str = mode_name
-    elif lobby_type and lobby_type != 0:
+    elif lobby_type == 7:
+        type_str = "Ranked"
+    elif lobby_type == 0:
+        type_str = "Public"
+    elif lobby_name:
         type_str = lobby_name
     else:
-        type_str = "Неизвестный режим"
+        type_str = "Matchmaking"
 
     embed = disnake.Embed(
         title=f"🎮 Активный матч #{match_id} • {type_str}",
@@ -209,7 +213,7 @@ def build_live_embed(match_id: int, players_info: list, heroes_list: dict) -> di
     )
 
     radiant = [p for p in players_info if p.get("slot", 0) < 128]
-    dire = [p for p in players_info if p.get("slot", 128) >= 128]
+    dire = [p for p in players_info if p.get("slot", 0) >= 128]
 
     # Счёт убийств
     radiant_score = next((p["radiant_score"] for p in players_info if p.get("radiant_score") is not None), None)
@@ -446,11 +450,10 @@ class Dota(commands.Cog):
                         unlinked_stats[s32] = {"wl": (w, l), "kda": kda, "top_heroes": top}
                     iter_players = match_players
                 else:
-                    # OpenDota ещё не обработал матч — показываем только привязанных
+                    # OpenDota ещё не обработал матч — показываем только того кто обнаружил матч
                     steam_profiles = {}
                     unlinked_stats = {}
-                    iter_players = [{"account_id": steam64_to_32(int(s64)), "hero_id": 0, "player_slot": 0}
-                                    for _, s64 in links]
+                    iter_players = [{"account_id": steam32, "hero_id": 0, "player_slot": 0}]
 
                 # Собираем инфу по игрокам матча
                 players_info = []
@@ -513,10 +516,9 @@ class Dota(commands.Cog):
                     continue
 
                 # Если матч уже завершён — сразу показываем итоги
-                if not is_live and match_data.get("duration"):
+                if not is_live and match_data and match_data.get("duration"):
                     embed = build_finished_embed(match_id, players_info, match_data, heroes_list)
                     await channel.send(embed=embed)
-                    # Помечаем как обработанный чтобы не дублировать
                     live_messages[guild.id][match_id] = (None, players_info)
                     log.info(f"[{guild.name}] Матч #{match_id} уже завершён, показываем итоги")
                 else:
@@ -528,6 +530,9 @@ class Dota(commands.Cog):
             # Обновляем live сообщение если матч ещё идёт
             elif match_id in live_messages.get(guild.id, {}):
                 msg, players_info = live_messages[guild.id][match_id]
+                if msg is None:
+                    # Уже показали итоги — пропускаем
+                    continue
                 # Проверяем завершился ли матч
                 match_data = await get_match_details(session, match_id)
                 if match_data and match_data.get("duration"):
@@ -577,16 +582,21 @@ class Dota(commands.Cog):
 
                     log.info(f"[{guild.name}] Матч #{match_id} завершён")
                 else:
-                    # Матч ещё идёт — обновляем embed с актуальным счётом
-                    match_data = await get_match_details(session, match_id)
+                    # Матч ещё идёт — обновляем embed с актуальным счётом и данными
                     if match_data:
                         rs = match_data.get("radiant_score")
                         ds = match_data.get("dire_score")
+                        gm = match_data.get("game_mode", 0)
+                        lt = match_data.get("lobby_type", 0)
                         for p in players_info:
                             if rs is not None:
                                 p["radiant_score"] = rs
                             if ds is not None:
                                 p["dire_score"] = ds
+                            if gm:
+                                p["game_mode"] = gm
+                            if lt:
+                                p["lobby_type"] = lt
                     live_embed = build_live_embed(match_id, players_info, heroes_list)
                     try:
                         await msg.edit(embed=live_embed)
