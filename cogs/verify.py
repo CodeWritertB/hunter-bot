@@ -75,8 +75,11 @@ class VerifyView(disnake.ui.View):
 class Verify(commands.Cog):
     def __init__(self, bot: commands.InteractionBot):
         self.bot = bot
-        # Регистрируем persistent view при старте
-        bot.add_view(VerifyView())
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        # Регистрируем persistent view после запуска
+        self.bot.add_view(VerifyView())
 
     @commands.slash_command(
         description="Настроить систему верификации",
