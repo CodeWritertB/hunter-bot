@@ -10,9 +10,7 @@ NAME_PATTERN = re.compile(r'^.+\s\(.+\)$')
 
 
 class NicknameModal(disnake.ui.Modal):
-    def __init__(self, guest_role_id: int, member_role_id: int):
-        self.guest_role_id = guest_role_id
-        self.member_role_id = member_role_id
+    def __init__(self):
         super().__init__(
             title="Изменить ник-нейм",
             components=[
@@ -33,13 +31,20 @@ class NicknameModal(disnake.ui.Modal):
                 ephemeral=True
             )
 
+        # Получаем настройки из БД по guild_id
+        settings = get_verify_settings(inter.guild.id)
+        if not settings:
+            return await inter.response.send_message("❌ Верификация не настроена.", ephemeral=True)
+
+        _, guest_role_id, member_role_id = settings
+
         try:
             await inter.author.edit(nick=name)
         except disnake.Forbidden:
             pass
 
-        guest_role = inter.guild.get_role(self.guest_role_id)
-        member_role = inter.guild.get_role(self.member_role_id)
+        guest_role = inter.guild.get_role(guest_role_id)
+        member_role = inter.guild.get_role(member_role_id)
         if guest_role:
             await inter.author.remove_roles(guest_role)
         if member_role:
@@ -53,19 +58,25 @@ class NicknameModal(disnake.ui.Modal):
 
 
 class VerifyView(disnake.ui.View):
-    def __init__(self, guest_role_id: int, member_role_id: int):
+    """Persistent View — работает после перезапуска бота."""
+    def __init__(self):
         super().__init__(timeout=None)
-        self.guest_role_id = guest_role_id
-        self.member_role_id = member_role_id
 
-    @disnake.ui.button(label="Изменить ник-нейм", style=disnake.ButtonStyle.primary, emoji="✏️")
+    @disnake.ui.button(
+        label="Изменить ник-нейм",
+        style=disnake.ButtonStyle.primary,
+        emoji="✏️",
+        custom_id="verify_button"  # фиксированный ID для persistent view
+    )
     async def verify_btn(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
-        await inter.response.send_modal(NicknameModal(self.guest_role_id, self.member_role_id))
+        await inter.response.send_modal(NicknameModal())
 
 
 class Verify(commands.Cog):
     def __init__(self, bot: commands.InteractionBot):
         self.bot = bot
+        # Регистрируем persistent view при старте
+        bot.add_view(VerifyView())
 
     @commands.slash_command(
         description="Настроить систему верификации",
@@ -81,7 +92,6 @@ class Verify(commands.Cog):
         set_verify_settings(inter.guild.id, channel.id, guest_role.id, member_role.id)
         log.info(f"[{inter.guild.name}] Верификация настроена: канал #{channel.name}, гость={guest_role.name}, участник={member_role.name}")
 
-        # Отправляем постоянное сообщение с кнопкой в канал верификации
         embed = disnake.Embed(
             title="Верификация",
             description=(
@@ -91,7 +101,7 @@ class Verify(commands.Cog):
             ),
             color=disnake.Color.blurple()
         )
-        await channel.send(embed=embed, view=VerifyView(guest_role.id, member_role.id))
+        await channel.send(embed=embed, view=VerifyView())
         await inter.response.send_message(
             f"✅ Верификация настроена в {channel.mention}", ephemeral=True
         )
@@ -101,7 +111,7 @@ class Verify(commands.Cog):
         settings = get_verify_settings(member.guild.id)
         if not settings:
             return
-        channel_id, guest_role_id, member_role_id = settings
+        channel_id, guest_role_id, _ = settings
 
         guest_role = member.guild.get_role(guest_role_id)
         if guest_role:
