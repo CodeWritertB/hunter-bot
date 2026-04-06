@@ -21,6 +21,7 @@ class Help(commands.Cog):
         embed1.add_field(name="/link_steam [ссылка]", value="Привязать Steam аккаунт.", inline=False)
         embed1.add_field(name="/unlink_steam", value="Отвязать Steam аккаунт.", inline=False)
         embed1.add_field(name="/link_cs [faceit_ник]", value="Привязать Faceit для CS2.", inline=False)
+        embed1.add_field(name="/server", value="Статус CS2 сервера.", inline=False)
         embed1.add_field(
             name="Голосовые комнаты",
             value="Зайди в лобби-канал — бот создаст комнату с панелью управления.",
@@ -37,6 +38,8 @@ class Help(commands.Cog):
             embed2.add_field(name="/set_music_channel [канал]", value="Канал для музыкального плеера.", inline=False)
             embed2.add_field(name="/set_dota_channel [канал]", value="Канал уведомлений Dota 2.", inline=False)
             embed2.add_field(name="/set_cs_channel [канал]", value="Канал уведомлений CS2.", inline=False)
+            embed2.add_field(name="/set_cs_server_channel [канал]", value="Канал уведомлений CS2 сервера.", inline=False)
+            embed2.add_field(name="/cs_admin", value="Панель управления CS2 сервером.", inline=False)
             embed2.add_field(name="/set_log [канал]", value="Канал логов сервера.", inline=False)
             embed2.add_field(name="/set_admin_log [канал]", value="Канал админских логов.", inline=False)
             embed2.add_field(name="/set_level_role [уровень] [роль]", value="Роль за уровень.", inline=False)

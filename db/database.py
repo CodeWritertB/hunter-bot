@@ -115,6 +115,12 @@ except Exception:
     pass
 
 try:
+    cursor.execute("ALTER TABLE servers ADD COLUMN cs_server_channel_id INTEGER")
+    conn.commit()
+except Exception:
+    pass
+
+try:
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS dota_players (
             guild_id     INTEGER NOT NULL,

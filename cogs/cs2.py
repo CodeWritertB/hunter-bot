@@ -73,7 +73,7 @@ async def get_faceit_stats(session: aiohttp.ClientSession, faceit_id: str) -> di
 
 
 async def get_faceit_match(session: aiohttp.ClientSession, faceit_id: str) -> dict | None:
-    """Проверяет активный матч игрока на Faceit."""
+    """Получает последний матч игрока на Faceit."""
     async with session.get(
         f"{FACEIT_API}/players/{faceit_id}/history",
         params={"game": "cs2", "limit": 1},
@@ -83,7 +83,18 @@ async def get_faceit_match(session: aiohttp.ClientSession, faceit_id: str) -> di
             return None
         data = await r.json()
         items = data.get("items", [])
-        return items[0] if items else None
+        if not items:
+            return None
+        match = items[0]
+        # Проверяем что матч завершён недавно (не старше 3 часов) или ещё идёт
+        import time as _t
+        finished_at = match.get("finished_at", 0)
+        started_at = match.get("started_at", 0)
+        now = _t.time()
+        # Если матч завершён давно — пропускаем
+        if finished_at and (now - finished_at) > 10800:
+            return None
+        return match
 
 
 async def get_faceit_match_details(session: aiohttp.ClientSession, match_id: str) -> dict | None:
@@ -99,64 +110,90 @@ async def get_faceit_match_details(session: aiohttp.ClientSession, match_id: str
 
 # --- Embed builders ---
 
+# --- Embed builders ---
+
 def build_cs_live_embed(match_id: str, players_info: list, match_data: dict | None) -> disnake.Embed:
+    """Live embed матча CS2 с разделением по командам."""
+    teams_data = match_data.get("teams", {}) if match_data else {}
+    t1_name = teams_data.get("faction1", {}).get("name", "Команда 1")
+    t2_name = teams_data.get("faction2", {}).get("name", "Команда 2")
+    # Определяем игроков по командам
+    t1_ids = {p.get("player_id") for p in teams_data.get("faction1", {}).get("roster", [])}
+
+    team1 = [p for p in players_info if p.get("faceit_id") in t1_ids]
+    team2 = [p for p in players_info if p.get("faceit_id") not in t1_ids]
+
     embed = disnake.Embed(
-        title=f"🔫 Активный матч CS2",
-        color=disnake.Color.orange(),
-        url=f"https://www.faceit.com/en/cs2/room/{match_id}" if match_id else None
+        title=f"🔫 Активный матч CS2 • {t1_name} vs {t2_name}",
+        color=disnake.Color.yellow(),
+        url=f"https://www.faceit.com/en/cs2/room/{match_id}"
     )
-    if match_data:
-        status = match_data.get("status", "—")
-        embed.add_field(name="Статус", value=status, inline=True)
-        teams = match_data.get("teams", {})
-        t1 = teams.get("faction1", {}).get("name", "Команда 1")
-        t2 = teams.get("faction2", {}).get("name", "Команда 2")
-        embed.add_field(name="Команды", value=f"{t1} vs {t2}", inline=True)
 
-    linked = [p for p in players_info if p.get("linked")]
-    others = [p for p in players_info if not p.get("linked")]
+    def format_team(players: list) -> str:
+        lines = []
+        for p in players:
+            mention = p["mention"]
+            if p.get("linked"):
+                elo = p.get("elo", "—")
+                level = p.get("level", "—")
+                wr = p.get("winrate", "—")
+                kd = p.get("kd", "—")
+                hs = p.get("hs", "—")
+                lines.append(
+                    f"**{mention}**\n"
+                    f"└ ELO: {elo} (ур.{level}) | WR: {wr}% | K/D: {kd} | HS: {hs}%"
+                )
+            else:
+                lines.append(mention)
+        return "\n".join(lines) if lines else "—"
 
-    # Привязанные — полная карточка
-    for p in linked:
-        elo = p.get("elo", "—")
-        level = p.get("level", "—")
-        wr = p.get("winrate", "—")
-        kd = p.get("kd", "—")
-        hs = p.get("hs", "—")
-        value = (
-            f"Faceit ELO: **{elo}** (уровень {level})\n"
-            f"Винрейт: **{wr}%**\n"
-            f"K/D: **{kd}** | HS: **{hs}%**"
-        )
-        embed.add_field(name=p["mention"], value=value, inline=True)
-
-    # Остальные — только ник
-    if others:
-        lines = [p["mention"] for p in others]
-        embed.add_field(name="Остальные игроки", value="\n".join(lines), inline=False)
-
+    embed.add_field(name=f"🟡 {t1_name}", value=format_team(team1), inline=False)
+    embed.add_field(name=f"🔵 {t2_name}", value=format_team(team2), inline=False)
     embed.set_footer(text="🔴 Матч идёт • Обновляется каждую минуту")
     return embed
 
 
 def build_cs_finished_embed(match_id: str, players_info: list, match_data: dict | None) -> disnake.Embed:
+    """Итоговый embed завершённого матча CS2."""
+    results = match_data.get("results", {}) if match_data else {}
+    winner_faction = results.get("winner", "")
+    teams_data = match_data.get("teams", {}) if match_data else {}
+    t1_name = teams_data.get("faction1", {}).get("name", "Команда 1")
+    t2_name = teams_data.get("faction2", {}).get("name", "Команда 2")
+    winner_name = t1_name if winner_faction == "faction1" else t2_name if winner_faction == "faction2" else "—"
+
+    # Определяем победила ли команда привязанного игрока
+    linked = [p for p in players_info if p.get("linked")]
+    t1_ids = {p.get("player_id") for p in teams_data.get("faction1", {}).get("roster", [])}
+    if linked:
+        first_linked_faction = "faction1" if linked[0].get("faceit_id") in t1_ids else "faction2"
+        linked_won = first_linked_faction == winner_faction
+        color = disnake.Color.green() if linked_won else disnake.Color.red()
+    else:
+        color = disnake.Color.blurple()
+
     embed = disnake.Embed(
-        title="✅ Матч CS2 завершён",
-        color=disnake.Color.green(),
-        url=f"https://www.faceit.com/en/cs2/room/{match_id}" if match_id else None
+        title=f"{'✅' if linked_won else '❌'} Матч CS2 завершён — победил {winner_name}",
+        color=color,
+        url=f"https://www.faceit.com/en/cs2/room/{match_id}"
     )
-    if match_data:
-        results = match_data.get("results", {})
-        winner = results.get("winner", "—")
-        embed.add_field(name="Победитель", value=winner, inline=True)
 
-    if players_info:
-        linked = [p for p in players_info if p.get("linked")]
-        lines = [f"{p['mention']} — ELO: {p.get('elo', '—')}" for p in linked]
-        if lines:
-            embed.add_field(name="Игроки сервера", value="\n".join(lines), inline=False)
+    # Счёт
+    score = results.get("score", {})
+    s1 = score.get("faction1", "?")
+    s2 = score.get("faction2", "?")
+    embed.add_field(name="Счёт", value=f"{t1_name} **{s1}** — **{s2}** {t2_name}", inline=False)
 
-    embed.set_footer(text=f"Faceit: faceit.com/en/cs2/room/{match_id}")
+    # Игроки сервера
+    if linked:
+        lines = []
+        for p in linked:
+            lines.append(
+                f"**{p['mention']}** — ELO: {p.get('elo','—')} | K/D: {p.get('kd','—')} | HS: {p.get('hs','—')}%"
+            )
+        embed.add_field(name="Игроки сервера", value="\n".join(lines), inline=False)
+
+    embed.set_footer(text=f"faceit.com/en/cs2/room/{match_id}")
     return embed
 
 
@@ -174,7 +211,8 @@ class CS2(commands.Cog):
         await self.bot.wait_until_ready()
         while not self.bot.is_closed():
             try:
-                await self.check_all_guilds()
+                if FACEIT_API_KEY:
+                    await self.check_all_guilds()
             except Exception as e:
                 log.error(f"Ошибка в cs2 match_tracker_loop: {e}")
             await asyncio.sleep(CHECK_INTERVAL)
@@ -242,7 +280,6 @@ class CS2(commands.Cog):
                     if p_faceit_id and p_faceit_id in linked_map:
                         uid, s64 = linked_map[p_faceit_id]
                         m = guild.get_member(uid)
-                        # Получаем Faceit статистику
                         fstats = await get_faceit_stats(session, p_faceit_id)
                         fplayer = await get_faceit_player(session, s64)
                         elo = fplayer.get("games", {}).get("cs2", {}).get("faceit_elo", "—") if fplayer else "—"
@@ -253,17 +290,38 @@ class CS2(commands.Cog):
                         hs = lifetime.get("Average Headshots %", "—")
                         players_info.append({
                             "mention": m.mention if m else f"ID:{uid}",
+                            "faceit_id": p_faceit_id,
                             "elo": elo, "level": level,
                             "winrate": wr, "kd": kd, "hs": hs,
                             "linked": True,
                         })
                     else:
-                        # Не привязан — показываем ник ссылкой
                         if p_faceit_id:
                             mention = f"[{p_nickname}](https://www.faceit.com/en/players/{p_nickname})"
+                            # Получаем статистику непривязанного игрока
+                            fstats = await get_faceit_stats(session, p_faceit_id)
+                            fplayer_data = None
+                            async with session.get(
+                                f"{FACEIT_API}/players/{p_faceit_id}",
+                                headers=FACEIT_HEADERS()
+                            ) as pr:
+                                if pr.status == 200:
+                                    fplayer_data = await pr.json()
+                            elo = fplayer_data.get("games", {}).get("cs2", {}).get("faceit_elo", "—") if fplayer_data else "—"
+                            level = fplayer_data.get("games", {}).get("cs2", {}).get("skill_level", "—") if fplayer_data else "—"
+                            lifetime = fstats.get("lifetime", {}) if fstats else {}
+                            wr = lifetime.get("Win Rate %", "—")
+                            kd = lifetime.get("Average K/D Ratio", "—")
+                            hs = lifetime.get("Average Headshots %", "—")
+                            players_info.append({
+                                "mention": mention,
+                                "faceit_id": p_faceit_id,
+                                "elo": elo, "level": level,
+                                "winrate": wr, "kd": kd, "hs": hs,
+                                "linked": False,
+                            })
                         else:
-                            mention = "Anonymous"
-                        players_info.append({"mention": mention, "linked": False})
+                            players_info.append({"mention": "Anonymous", "faceit_id": None, "linked": False})
 
                 embed = build_cs_live_embed(match_id, players_info, match_data)
                 msg = await channel.send(embed=embed)

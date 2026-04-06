@@ -3,3 +3,4 @@ python-dotenv==1.2.2
 yt-dlp==2026.3.13
 PyNaCl==1.6.2
 aiohttp==3.13.3
+python-a2s==1.4.1
