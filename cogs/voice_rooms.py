@@ -347,9 +347,20 @@ class RoomPanel(disnake.ui.View):
                 f"⏳ Поднять можно через **{int(remaining)}** сек.", ephemeral=True
             )
         raise_cooldowns[self.vc.id] = now
-        # Поднимаем канал вверх в категории
+        # Поднимаем канал вверх в категории, но не выше лобби
         try:
-            await self.vc.edit(position=0)
+            lobby_id = get_lobby(self.vc.guild.id)
+            lobby = self.vc.guild.get_channel(lobby_id) if lobby_id else None
+            if lobby and self.vc.category_id == lobby.category_id:
+                # Ставим сразу после лобби
+                await self.vc.edit(position=lobby.position + 1)
+            else:
+                # Поднимаем на первое место в категории
+                category = self.vc.category
+                if category:
+                    channels = sorted(category.voice_channels, key=lambda c: c.position)
+                    if channels:
+                        await self.vc.edit(position=channels[0].position)
         except Exception:
             pass
         await inter.response.send_message("✅ Комната поднята.", ephemeral=True)
