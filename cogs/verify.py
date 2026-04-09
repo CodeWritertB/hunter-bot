@@ -31,20 +31,27 @@ class NicknameModal(disnake.ui.Modal):
                 ephemeral=True
             )
 
-        # Получаем настройки из БД по guild_id
         settings = get_verify_settings(inter.guild.id)
         if not settings:
             return await inter.response.send_message("❌ Верификация не настроена.", ephemeral=True)
 
         _, guest_role_id, member_role_id = settings
 
+        # Проверяем — уже верифицирован (есть роль участника или нет роли гостя)
+        guest_role = inter.guild.get_role(guest_role_id)
+        member_role = inter.guild.get_role(member_role_id)
+
+        if member_role and member_role in inter.author.roles:
+            return await inter.response.send_message("✅ Ты уже верифицирован.", ephemeral=True)
+
+        if guest_role and guest_role not in inter.author.roles:
+            return await inter.response.send_message("✅ Ты уже верифицирован.", ephemeral=True)
+
         try:
             await inter.author.edit(nick=name)
         except disnake.Forbidden:
             pass
 
-        guest_role = inter.guild.get_role(guest_role_id)
-        member_role = inter.guild.get_role(member_role_id)
         if guest_role:
             await inter.author.remove_roles(guest_role)
         if member_role:
@@ -66,7 +73,7 @@ class VerifyView(disnake.ui.View):
         label="Изменить ник-нейм",
         style=disnake.ButtonStyle.primary,
         emoji="✏️",
-        custom_id="verify_button"  # фиксированный ID для persistent view
+        custom_id="verify_button"
     )
     async def verify_btn(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
         await inter.response.send_modal(NicknameModal())
@@ -78,7 +85,6 @@ class Verify(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        # Регистрируем persistent view после запуска
         self.bot.add_view(VerifyView())
 
     @commands.slash_command(
@@ -93,7 +99,7 @@ class Verify(commands.Cog):
         member_role: disnake.Role
     ):
         set_verify_settings(inter.guild.id, channel.id, guest_role.id, member_role.id)
-        log.info(f"[{inter.guild.name}] Верификация настроена: канал #{channel.name}, гость={guest_role.name}, участник={member_role.name}")
+        log.info(f"[{inter.guild.name}] Верификация настроена: канал #{channel.name}")
 
         embed = disnake.Embed(
             title="Верификация",
