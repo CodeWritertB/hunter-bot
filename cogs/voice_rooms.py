@@ -347,13 +347,11 @@ class RoomPanel(disnake.ui.View):
                 f"⏳ Поднять можно через **{int(remaining)}** сек.", ephemeral=True
             )
         raise_cooldowns[self.vc.id] = now
-        if msg := panel_messages.get(self.vc.id):
-            try:
-                await msg.delete()
-            except Exception:
-                pass
-        new_msg = await self.vc.send(embed=build_panel_embed(self.vc, self.owner), view=RoomPanel(self.vc, self.owner))
-        panel_messages[self.vc.id] = new_msg
+        # Поднимаем канал вверх в категории
+        try:
+            await self.vc.edit(position=0)
+        except Exception:
+            pass
         await inter.response.send_message("✅ Комната поднята.", ephemeral=True)
 
 
