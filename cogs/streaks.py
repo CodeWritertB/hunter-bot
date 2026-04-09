@@ -68,7 +68,15 @@ class Streaks(commands.Cog):
             pass
 
     @commands.Cog.listener()
-    async def on_voice_state_update(self, member: disnake.Member, before: disnake.VoiceState, after: disnake.VoiceState):
+    async def on_ready(self):
+        """При старте восстанавливаем voice_today из БД."""
+        today = datetime.now(MSK).date().isoformat()
+        for guild in self.bot.guilds:
+            rows = get_all_streaks(guild.id)
+            voice_today[guild.id] = {
+                user_id for user_id, _, last_date in rows
+                if last_date == today
+            }
         if member.bot:
             return
         # Зашёл в войс — отмечаем и сразу выдаём стрик если первый раз сегодня

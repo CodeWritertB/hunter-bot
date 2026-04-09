@@ -86,6 +86,11 @@ cursor.executescript("""
         peak_online      INTEGER DEFAULT 0,
         peak_online_date TEXT
     );
+    CREATE TABLE IF NOT EXISTS panel_messages (
+        channel_id  INTEGER PRIMARY KEY,
+        guild_id    INTEGER NOT NULL,
+        message_id  INTEGER NOT NULL
+    );
 
     -- Привязка Steam аккаунтов
     CREATE TABLE IF NOT EXISTS steam_links (
@@ -116,6 +121,18 @@ except Exception:
 
 try:
     cursor.execute("ALTER TABLE servers ADD COLUMN cs_server_channel_id INTEGER")
+    conn.commit()
+except Exception:
+    pass
+
+try:
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS panel_messages (
+            channel_id  INTEGER PRIMARY KEY,
+            guild_id    INTEGER NOT NULL,
+            message_id  INTEGER NOT NULL
+        )
+    """)
     conn.commit()
 except Exception:
     pass
@@ -240,6 +257,35 @@ def is_temp_channel(channel_id: int) -> bool:
     return cursor.execute(
         "SELECT 1 FROM temp_channels WHERE channel_id = ?", (channel_id,)
     ).fetchone() is not None
+
+def get_all_temp_channels(guild_id: int) -> list:
+    """Возвращает все временные каналы сервера: [(channel_id, owner_id)]."""
+    return cursor.execute(
+        "SELECT channel_id, owner_id FROM temp_channels WHERE guild_id = ?", (guild_id,)
+    ).fetchall()
+
+# --- Panel messages ---
+
+def save_panel_message(channel_id: int, guild_id: int, message_id: int):
+    cursor.execute(
+        "INSERT INTO panel_messages (channel_id, guild_id, message_id) VALUES (?, ?, ?) "
+        "ON CONFLICT(channel_id) DO UPDATE SET message_id=excluded.message_id",
+        (channel_id, guild_id, message_id)
+    )
+    conn.commit()
+
+def get_panel_message(channel_id: int) -> int | None:
+    row = cursor.execute("SELECT message_id FROM panel_messages WHERE channel_id = ?", (channel_id,)).fetchone()
+    return row[0] if row else None
+
+def remove_panel_message(channel_id: int):
+    cursor.execute("DELETE FROM panel_messages WHERE channel_id = ?", (channel_id,))
+    conn.commit()
+
+def get_all_panel_messages(guild_id: int) -> list:
+    return cursor.execute(
+        "SELECT channel_id, message_id FROM panel_messages WHERE guild_id = ?", (guild_id,)
+    ).fetchall()
 
 
 # --- Настройки комнаты ---

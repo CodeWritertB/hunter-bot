@@ -6,7 +6,9 @@ from db.database import (
     get_lobby, set_lobby,
     add_temp_channel, get_temp_channel,
     update_temp_channel_owner, remove_temp_channel, is_temp_channel,
-    get_music_channel, save_room_settings, get_room_settings
+    get_music_channel, save_room_settings, get_room_settings,
+    get_all_temp_channels, save_panel_message, get_panel_message,
+    remove_panel_message, get_all_panel_messages
 )
 
 log = logging.getLogger("cogs.voice_rooms")
@@ -361,6 +363,37 @@ class VoiceRooms(commands.Cog):
     def __init__(self, bot: commands.InteractionBot):
         self.bot = bot
 
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """При старте удаляем пустые временные каналы и восстанавливаем panel_messages."""
+        from db.database import get_all_temp_channels
+        for guild in self.bot.guilds:
+            # Восстанавливаем panel_messages из БД
+            for channel_id, message_id in get_all_panel_messages(guild.id):
+                vc = guild.get_channel(channel_id)
+                if vc:
+                    try:
+                        msg = await vc.fetch_message(message_id)
+                        panel_messages[channel_id] = msg
+                    except Exception:
+                        remove_panel_message(channel_id)
+
+            # Удаляем пустые временные каналы
+            rows = get_all_temp_channels(guild.id)
+            for channel_id, owner_id in rows:
+                vc = guild.get_channel(channel_id)
+                if vc is None:
+                    remove_temp_channel(channel_id)
+                    remove_panel_message(channel_id)
+                elif len([m for m in vc.members if not m.bot]) == 0:
+                    remove_temp_channel(channel_id)
+                    remove_panel_message(channel_id)
+                    panel_messages.pop(channel_id, None)
+                    try:
+                        await vc.delete()
+                    except Exception:
+                        pass
+
     @commands.slash_command(
         description="Назначить лобби-канал для создания приватных комнат",
         default_member_permissions=disnake.Permissions(administrator=True)
@@ -427,6 +460,7 @@ class VoiceRooms(commands.Cog):
             add_temp_channel(vc.id, guild.id, member.id)
             msg = await vc.send(embed=build_panel_embed(vc, member), view=RoomPanel(vc, member))
             panel_messages[vc.id] = msg
+            save_panel_message(vc.id, guild.id, msg.id)
             log.info(f"[{guild.name}] Создана комната: {vc.name} для {member}")
 
         if before.channel and is_temp_channel(before.channel.id):
@@ -444,6 +478,7 @@ class VoiceRooms(commands.Cog):
                 recent_members.pop(vc.id, None)
                 raise_cooldowns.pop(vc.id, None)
                 remove_temp_channel(vc.id)
+                remove_panel_message(vc.id)
                 await vc.delete()
                 log.info(f"[{guild.name}] Удалена пустая комната: {vc.name}")
             else:

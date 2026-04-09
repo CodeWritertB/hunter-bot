@@ -34,6 +34,12 @@ class Tracker(commands.Cog):
             ]
             if rows:
                 bulk_upsert_members(rows)
+            # Восстанавливаем voice_sessions для тех кто сейчас в войсе
+            voice_sessions[guild.id] = {}
+            for vc in guild.voice_channels:
+                for member in vc.members:
+                    if not member.bot:
+                        voice_sessions[guild.id][member.id] = time.time()
         log.info("Синхронизация участников завершена")
 
     @commands.Cog.listener()

@@ -205,6 +205,12 @@ class GameServer(commands.Cog):
     async def monitor_loop(self):
         """Отслеживает вход/выход игроков на сервере."""
         await self.bot.wait_until_ready()
+        # Инициализируем prev_players текущим состоянием чтобы не спамить при старте
+        info, players = await get_server_info()
+        if info:
+            current = {p.name for p in players}
+            for guild in self.bot.guilds:
+                prev_players[guild.id] = current
         while not self.bot.is_closed():
             try:
                 info, players = await get_server_info()
