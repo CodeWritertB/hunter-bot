@@ -83,42 +83,49 @@ async def status_loop():
     idx = 0
     await bot.wait_until_ready()
     while not bot.is_closed():
-        active_rooms = len(panel_messages)
+        try:
+            active_rooms = len(panel_messages)
 
-        # Считаем сколько человек сейчас в приватных комнатах
-        people_in_rooms = sum(
-            len([m for m in bot.get_channel(cid).members if not m.bot])
-            for cid in panel_messages
-            if bot.get_channel(cid)
-        ) if panel_messages else 0
+            # Считаем сколько человек сейчас в приватных комнатах
+            people_in_rooms = sum(
+                len([m for m in bot.get_channel(cid).members if not m.bot])
+                for cid in panel_messages
+                if bot.get_channel(cid)
+            ) if panel_messages else 0
 
-        # Ищем текущий играющий трек среди всех плееров
-        current_track = None
-        for player in players.values():
-            if player.current and not player.paused:
-                current_track = player.current.get("info", {}).get("title")
-                if current_track:
-                    break
+            # Ищем текущий играющий трек среди всех плееров
+            current_track = None
+            for player in players.values():
+                if player.current and not player.paused:
+                    current_track = player.current.get("info", {}).get("title")
+                    if current_track:
+                        break
 
-        # Если трек играет — показываем его, иначе чередуем статусы
-        if current_track:
-            await bot.change_presence(
-                activity=disnake.Activity(type=disnake.ActivityType.listening, name=current_track)
-            )
-        else:
-            statuses = [
-                (disnake.ActivityType.watching, f"{active_rooms} комнат | {people_in_rooms} человек в комнатах"),
-            ]
-            atype, text = statuses[idx % len(statuses)]
-            await bot.change_presence(activity=disnake.Activity(type=atype, name=text))
-            idx += 1
+            # Если трек играет — показываем его, иначе чередуем статусы
+            if current_track:
+                await bot.change_presence(
+                    activity=disnake.Activity(type=disnake.ActivityType.listening, name=current_track)
+                )
+            else:
+                statuses = [
+                    (disnake.ActivityType.watching, f"{active_rooms} комнат | {people_in_rooms} человек в комнатах"),
+                ]
+                atype, text = statuses[idx % len(statuses)]
+                await bot.change_presence(activity=disnake.Activity(type=atype, name=text))
+                idx += 1
+        except Exception as e:
+            log.warning(f"status_loop: пропуск итерации ({e})")
         await asyncio.sleep(15)
 
 
+_status_task = None
+
 @bot.event
 async def on_ready():
+    global _status_task
     log.info(f"Bot {bot.user} is ready to work!")
-    # Запускаем цикл обновления статуса
-    bot.loop.create_task(status_loop())
+    # Запускаем цикл обновления статуса (храним ссылку, чтобы исключения не терялись)
+    if _status_task is None or _status_task.done():
+        _status_task = bot.loop.create_task(status_loop())
 
 bot.run(os.getenv("BOT_TOKEN"))

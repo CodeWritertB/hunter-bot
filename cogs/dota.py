@@ -352,11 +352,18 @@ class Dota(commands.Cog):
     async def match_tracker_loop(self):
         """Фоновый цикл — проверяет активные матчи каждые 2 минуты."""
         await self.bot.wait_until_ready()
+        _fail_count = 0
         while not self.bot.is_closed():
             try:
                 await self.check_all_guilds()
+                _fail_count = 0
             except Exception as e:
-                log.error(f"Ошибка в match_tracker_loop: {e}")
+                _fail_count += 1
+                # Экспоненциальный бэкофф: 30s, 60s, 120s, max 300s
+                backoff = min(30 * (2 ** (_fail_count - 1)), 300)
+                log.error(f"Ошибка в match_tracker_loop (попытка {_fail_count}): {e}. Повтор через {backoff}s")
+                await asyncio.sleep(backoff)
+                continue
             await asyncio.sleep(CHECK_INTERVAL)
 
     async def check_all_guilds(self):

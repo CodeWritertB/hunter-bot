@@ -77,6 +77,9 @@ class Streaks(commands.Cog):
                 user_id for user_id, _, last_date in rows
                 if last_date == today
             }
+
+    @commands.Cog.listener()
+    async def on_voice_state_update(self, member: disnake.Member, before: disnake.VoiceState, after: disnake.VoiceState):
         if member.bot:
             return
         # Зашёл в войс — отмечаем и сразу выдаём стрик если первый раз сегодня
