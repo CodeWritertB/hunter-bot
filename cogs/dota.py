@@ -6,7 +6,7 @@ import time as _time
 import disnake
 from datetime import datetime, timezone, timedelta
 from disnake.ext import commands
-from db.database import link_steam, get_steam_id, unlink_steam, get_all_steam_links, _upsert_server, _get_server, get_dota_player, update_dota_rank, add_dota_match, get_guild_week_stats
+from db.database import link_steam, get_steam_id, unlink_steam, get_all_steam_links, _upsert_server, _get_server, get_dota_player, update_dota_rank, add_dota_match, get_guild_week_stats, is_match_processed, mark_match_processed
 
 log = logging.getLogger("cogs.dota")
 
@@ -420,9 +420,11 @@ class Dota(commands.Cog):
             if match_id != prev_match_id and is_recent:
                 active_matches[guild.id][steam32] = match_id
 
-                # Пропускаем если этот матч уже обработан другим игроком
-                if match_id in live_messages.get(guild.id, {}):
+                # Пропускаем если этот матч уже обработан (проверяем БД для надёжности после перезапуска)
+                if match_id in live_messages.get(guild.id, {}) or is_match_processed(guild.id, match_id):
                     continue
+
+                mark_match_processed(guild.id, match_id)
 
                 # Пробуем получить детали из OpenDota (может ещё не быть если матч только начался)
                 match_data = await get_match_details(session, match_id)

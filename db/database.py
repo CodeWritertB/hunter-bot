@@ -139,6 +139,18 @@ except Exception:
 
 try:
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS processed_matches (
+            guild_id  INTEGER NOT NULL,
+            match_id  INTEGER NOT NULL,
+            PRIMARY KEY (guild_id, match_id)
+        )
+    """)
+    conn.commit()
+except Exception:
+    pass
+
+try:
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS dota_players (
             guild_id     INTEGER NOT NULL,
             user_id      INTEGER NOT NULL,
@@ -286,6 +298,25 @@ def get_all_panel_messages(guild_id: int) -> list:
     return cursor.execute(
         "SELECT channel_id, message_id FROM panel_messages WHERE guild_id = ?", (guild_id,)
     ).fetchall()
+
+# --- Processed matches (dota deduplication) ---
+
+def is_match_processed(guild_id: int, match_id: int) -> bool:
+    return cursor.execute(
+        "SELECT 1 FROM processed_matches WHERE guild_id = ? AND match_id = ?", (guild_id, match_id)
+    ).fetchone() is not None
+
+def mark_match_processed(guild_id: int, match_id: int):
+    cursor.execute(
+        "INSERT OR IGNORE INTO processed_matches (guild_id, match_id) VALUES (?, ?)", (guild_id, match_id)
+    )
+    # Чистим старые записи — оставляем последние 50
+    cursor.execute(
+        "DELETE FROM processed_matches WHERE guild_id = ? AND match_id NOT IN "
+        "(SELECT match_id FROM processed_matches WHERE guild_id = ? ORDER BY match_id DESC LIMIT 50)",
+        (guild_id, guild_id)
+    )
+    conn.commit()
 
 
 # --- Настройки комнаты ---
