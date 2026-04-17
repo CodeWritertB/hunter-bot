@@ -287,8 +287,17 @@ def build_finished_embed(match_id: int, players_info: list, match_data: dict | N
             if acc_id:
                 match_players_map[acc_id] = mp
 
-    # Строим словарь steam32 -> players_info для быстрого поиска
-    linked_map = {p.get("steam32"): p for p in players_info if p.get("steam32")}
+    # Строим словарь account_id -> players_info для привязанных игроков
+    # Используем данные из match_data для правильного account_id
+    linked_map = {}
+    if match_data:
+        for mp in match_data.get("players", []):
+            acc_id = mp.get("account_id")
+            if acc_id:
+                # Ищем в players_info по steam32
+                p = next((x for x in players_info if x.get("steam32") == acc_id), None)
+                if p and p.get("linked"):
+                    linked_map[acc_id] = p
 
     def format_team_final(slots: range) -> str:
         lines = []
@@ -321,9 +330,7 @@ def build_finished_embed(match_id: int, players_info: list, match_data: dict | N
             else:
                 s64 = str(acc_id + 76561197960265728) if acc_id else None
                 if s64:
-                    # Ищем имя из players_info
-                    name_p = next((p for p in players_info if p.get("slot") == slot), None)
-                    mention = name_p["mention"] if name_p else f"[Игрок](https://steamcommunity.com/profiles/{s64})"
+                    mention = f"[Игрок](https://steamcommunity.com/profiles/{s64})"
                 else:
                     mention = "Anonymous"
                 line = f"{mention} — {hero} | {k}/{d}/{a} | {net:,} нетворс"
