@@ -126,6 +126,12 @@ except Exception:
     pass
 
 try:
+    cursor.execute("ALTER TABLE voice_streaks ADD COLUMN cold_streak INTEGER DEFAULT 0")
+    conn.commit()
+except Exception:
+    pass  # Колонка уже существует
+
+try:
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS panel_messages (
             channel_id  INTEGER PRIMARY KEY,
@@ -396,28 +402,28 @@ def get_xp_role(guild_id: int, level: int):
 
 # --- Стрики войса ---
 
-def update_streak(guild_id: int, user_id: int, streak: int, date_str: str):
+def update_streak(guild_id: int, user_id: int, streak: int, date_str: str, cold_streak: int = 0):
     """Обновляет стрик участника."""
     cursor.execute(
-        "INSERT INTO voice_streaks (guild_id, user_id, streak, last_date) VALUES (?, ?, ?, ?) "
-        "ON CONFLICT(guild_id, user_id) DO UPDATE SET streak=excluded.streak, last_date=excluded.last_date",
-        (guild_id, user_id, streak, date_str)
+        "INSERT INTO voice_streaks (guild_id, user_id, streak, cold_streak, last_date) VALUES (?, ?, ?, ?, ?) "
+        "ON CONFLICT(guild_id, user_id) DO UPDATE SET streak=excluded.streak, cold_streak=excluded.cold_streak, last_date=excluded.last_date",
+        (guild_id, user_id, streak, cold_streak, date_str)
     )
     conn.commit()
 
 def get_all_streaks(guild_id: int):
-    """Возвращает все стрики сервера: [(user_id, streak, last_date)]."""
+    """Возвращает все стрики сервера: [(user_id, streak, cold_streak, last_date)]."""
     return cursor.execute(
-        "SELECT user_id, streak, last_date FROM voice_streaks WHERE guild_id = ?", (guild_id,)
+        "SELECT user_id, streak, cold_streak, last_date FROM voice_streaks WHERE guild_id = ?", (guild_id,)
     ).fetchall()
 
 def get_streak(guild_id: int, user_id: int):
-    """Возвращает (streak, last_date) участника или (0, None)."""
+    """Возвращает (streak, cold_streak, last_date) участника или (0, 0, None)."""
     row = cursor.execute(
-        "SELECT streak, last_date FROM voice_streaks WHERE guild_id = ? AND user_id = ?",
+        "SELECT streak, cold_streak, last_date FROM voice_streaks WHERE guild_id = ? AND user_id = ?",
         (guild_id, user_id)
     ).fetchone()
-    return row if row else (0, None)
+    return row if row else (0, 0, None)
 
 
 # --- Статистика участников ---

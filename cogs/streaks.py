@@ -14,10 +14,14 @@ MSK = timezone(timedelta(hours=3))
 voice_today: dict[int, set[int]] = {}
 
 
-def build_nick(base_nick: str, streak: int) -> str:
-    base_nick = re.sub(r'\s*🔥\d+$', '', base_nick).strip()
+def build_nick(base_nick: str, streak: int, cold_streak: int = 0) -> str:
+    """Строит ник с суффиксом стрика или обратного стрика."""
+    # Убираем старые суффиксы
+    base_nick = re.sub(r'\s*[🔥❄️]\d+$', '', base_nick).strip()
     if streak >= 1:
         return f"{base_nick} 🔥{streak}"
+    elif cold_streak >= 2:
+        return f"{base_nick} ❄️{cold_streak}"
     return base_nick
 
 
@@ -33,35 +37,36 @@ class Streaks(commands.Cog):
         await self.bot.wait_until_ready()
         while not self.bot.is_closed():
             now = datetime.now(MSK)
-            # Следующий 00:00 по МСК
             next_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
             wait_seconds = (next_midnight - now).total_seconds()
             await asyncio.sleep(wait_seconds)
             await self.process_daily_reset()
 
     async def process_daily_reset(self):
-        """В 00:00 сбрасывает стрик тем кто не заходил вчера."""
+        """В 00:00 сбрасывает стрик и увеличивает обратный стрик тем кто не заходил."""
         today = datetime.now(MSK).date()
         yesterday = (today - timedelta(days=1)).isoformat()
 
         for guild in self.bot.guilds:
             rows = get_all_streaks(guild.id)
-            for user_id, streak, last_date in rows:
+            for row in rows:
+                user_id, streak, cold_streak, last_date = row[0], row[1], row[2] if len(row) > 2 else 0, row[-1]
                 # Сбрасываем только тех кто не заходил вчера и не заходил сегодня
                 if last_date != yesterday and last_date != today.isoformat():
                     member = guild.get_member(user_id)
                     if not member:
                         continue
-                    update_streak(guild.id, user_id, 0, today.isoformat())
-                    await self.update_nick(member, 0)
-                    log.info(f"[{guild.name}] Стрик сброшен: {member} (последний заход: {last_date})")
+                    new_cold = (cold_streak or 0) + 1
+                    update_streak(guild.id, user_id, 0, today.isoformat(), new_cold)
+                    await self.update_nick(member, 0, new_cold)
+                    log.info(f"[{guild.name}] Стрик сброшен: {member}, холодный стрик: {new_cold}")
 
             voice_today[guild.id] = set()
 
-    async def update_nick(self, member: disnake.Member, streak: int):
+    async def update_nick(self, member: disnake.Member, streak: int, cold_streak: int = 0):
         try:
             current = member.display_name
-            new_nick = build_nick(current, streak)
+            new_nick = build_nick(current, streak, cold_streak)
             if new_nick != current:
                 await member.edit(nick=new_nick if new_nick != member.name else None)
         except disnake.Forbidden:
@@ -74,8 +79,7 @@ class Streaks(commands.Cog):
         for guild in self.bot.guilds:
             rows = get_all_streaks(guild.id)
             voice_today[guild.id] = {
-                user_id for user_id, _, last_date in rows
-                if last_date == today
+                row[0] for row in rows if row[-1] == today
             }
 
     @commands.Cog.listener()
@@ -90,24 +94,22 @@ class Streaks(commands.Cog):
             if guild_id not in voice_today:
                 voice_today[guild_id] = set()
 
-            # Если сегодня ещё не заходил — сразу обновляем стрик
             if member.id not in voice_today[guild_id]:
                 voice_today[guild_id].add(member.id)
-                streak, last_date = get_streak(guild_id, member.id)
+                data = get_streak(guild_id, member.id)
+                streak, cold_streak, last_date = data[0], data[1], data[2]
                 yesterday = (datetime.now(MSK).date() - timedelta(days=1)).isoformat()
 
                 if last_date == today:
-                    # Уже заходил сегодня (например после перезапуска бота) — не меняем
                     return
                 elif last_date == yesterday:
-                    # Заходил вчера — продолжаем стрик
                     new_streak = streak + 1
                 else:
-                    # Первый раз или пропустил день — начинаем с 1
                     new_streak = 1
 
-                update_streak(guild_id, member.id, new_streak, today)
-                await self.update_nick(member, new_streak)
+                # Сбрасываем обратный стрик при заходе
+                update_streak(guild_id, member.id, new_streak, today, 0)
+                await self.update_nick(member, new_streak, 0)
                 log.info(f"[{member.guild.name}] Стрик {member}: {streak} -> {new_streak}")
 
 

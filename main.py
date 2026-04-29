@@ -73,6 +73,7 @@ bot.load_extension("cogs.cs2")          # CS2 / Faceit статистика
 bot.load_extension("cogs.gameserver")   # CS2 сервер мониторинг
 bot.load_extension("cogs.admin_panel")  # Панель управления сервером
 bot.load_extension("cogs.reload")       # Перезагрузка модулей
+bot.load_extension("cogs.autoupdate")   # Автообновление с GitHub
 
 
 async def status_loop():
