@@ -16,8 +16,8 @@ voice_today: dict[int, set[int]] = {}
 
 def build_nick(base_nick: str, streak: int, cold_streak: int = 0) -> str:
     """Строит ник с суффиксом стрика или обратного стрика."""
-    # Убираем старые суффиксы
-    base_nick = re.sub(r'\s*[🔥❄️]\d+$', '', base_nick).strip()
+    # Убираем старые суффиксы (🔥N или ❄N с возможным вариационным селектором)
+    base_nick = re.sub(r'\s*[\U0001F525\u2744\uFE0F]+\d+$', '', base_nick).strip()
     if streak >= 1:
         return f"{base_nick} 🔥{streak}"
     elif cold_streak >= 2:

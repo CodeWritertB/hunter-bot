@@ -50,17 +50,11 @@ class NicknameModal(disnake.ui.Modal):
         try:
             # Проверяем есть ли уже стрик и добавляем его в ник
             from db.database import get_streak as db_get_streak
+            from cogs.streaks import build_nick as _build_nick
             streak_data = db_get_streak(inter.guild.id, inter.author.id)
             streak = streak_data[0] if streak_data else 0
             cold = streak_data[1] if streak_data and len(streak_data) > 1 else 0
-            if streak >= 1:
-                import re as _re
-                name = _re.sub(r'\s*[🔥❄️]\d+$', '', name).strip()
-                name = f"{name} 🔥{streak}"
-            elif cold >= 2:
-                import re as _re
-                name = _re.sub(r'\s*[🔥❄️]\d+$', '', name).strip()
-                name = f"{name} ❄️{cold}"
+            name = _build_nick(name, streak, cold)
             await inter.author.edit(nick=name)
         except disnake.Forbidden:
             pass
