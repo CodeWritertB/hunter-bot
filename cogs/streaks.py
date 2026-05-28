@@ -112,6 +112,41 @@ class Streaks(commands.Cog):
                 await self.update_nick(member, new_streak, 0)
                 log.info(f"[{member.guild.name}] Стрик {member}: {streak} -> {new_streak}")
 
+    @commands.slash_command(description="Проверить голосовой стрик участника")
+    async def streak(self, inter: disnake.ApplicationCommandInteraction, member: disnake.Member = None):
+        member = member or inter.author
+        streak, cold_streak, last_date = get_streak(inter.guild.id, member.id)
+        if streak >= 1:
+            text = f"🔥 Стрик голосовой активности: {streak}"
+        elif cold_streak >= 2:
+            text = f"❄️ Обратный стрик: {cold_streak}"
+        else:
+            text = "Стрик не начат."
+        embed = disnake.Embed(
+            title=f"Статус стрика — {member.display_name}",
+            description=text,
+            color=disnake.Color.blurple()
+        )
+        embed.add_field(name="Последняя дата", value=str(last_date or "нет данных"), inline=False)
+        await inter.response.send_message(embed=embed, ephemeral=True)
+
+    @commands.slash_command(description="Применить записанный стрик к никам участника")
+    async def refresh_nick(self, inter: disnake.ApplicationCommandInteraction, member: disnake.Member = None):
+        member = member or inter.author
+        if member != inter.author and not inter.author.guild_permissions.manage_nicknames:
+            return await inter.response.send_message("❌ Нужно право «Управлять никами», чтобы менять чужие имена.", ephemeral=True)
+
+        streak, cold_streak, _ = get_streak(inter.guild.id, member.id)
+        new_nick = build_nick(member.display_name, streak, cold_streak)
+        if new_nick == member.display_name:
+            return await inter.response.send_message("✅ Ник уже соответствует текущему стрику.", ephemeral=True)
+
+        try:
+            await member.edit(nick=new_nick if new_nick != member.name else None)
+            await inter.response.send_message(f"✅ Ник обновлён: **{new_nick}**", ephemeral=True)
+        except disnake.Forbidden:
+            await inter.response.send_message("❌ Нет прав менять никнейм.", ephemeral=True)
+
 
 def setup(bot: commands.InteractionBot):
     bot.add_cog(Streaks(bot))
