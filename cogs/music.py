@@ -1,9 +1,11 @@
 import asyncio
 import json
 import logging
+import re
 import aiohttp
 import disnake
 from disnake.ext import commands
+from yt_dlp import YoutubeDL
 from db.database import get_music_channel, set_music_channel as db_set_music_channel
 
 log = logging.getLogger("cogs.music")
@@ -17,6 +19,69 @@ LAVALINK_BASE = f"{'https' if LAVALINK_SECURE else 'http'}://{LAVALINK_HOST}:{LA
 LAVALINK_HEADERS = {"Authorization": LAVALINK_PASSWORD, "Content-Type": "application/json"}
 
 music_cog_session: str | None = None
+
+
+def is_spotify_url(query: str) -> bool:
+    return bool(re.search(r"(?:open\.spotify\.com|spotify:)", query, flags=re.IGNORECASE))
+
+
+def format_search_query(info: dict) -> str:
+    title = info.get("title") or ""
+    artist = info.get("artist") or info.get("uploader") or ""
+    return f"{title} {artist}".strip()
+
+
+async def extract_spotify_items(query: str) -> list[str] | None:
+    def _extract():
+        with YoutubeDL({"quiet": True, "no_warnings": True, "extract_flat": True}) as ydl:
+            return ydl.extract_info(query, download=False)
+
+    try:
+        info = await asyncio.to_thread(_extract)
+    except Exception:
+        return None
+
+    if not info:
+        return None
+
+    if info.get("_type") in {"playlist", "multi_video"} or info.get("entries"):
+        entries = info.get("entries", [])
+        return [format_search_query(entry) for entry in entries if entry]
+
+    return [format_search_query(info)]
+
+
+async def search_track(query: str) -> dict | list[dict] | None:
+    if is_spotify_url(query):
+        items = await extract_spotify_items(query)
+        if not items:
+            return None
+
+        tracks = []
+        for item in items[:50]:
+            result = await search_track(item)
+            if isinstance(result, list):
+                tracks.extend(result)
+            elif result:
+                tracks.append(result)
+        return tracks if tracks else None
+
+    if not query.startswith("http"):
+        query = f"ytsearch:{query}"
+
+    data = await lavalink_request("GET", "/v4/loadtracks", params={"identifier": query})
+    if not data:
+        return None
+
+    lt = data.get("loadType")
+    if lt == "track":
+        return data.get("data")
+    if lt == "search":
+        tracks = data.get("data", [])
+        return tracks[0] if tracks else None
+    if lt == "playlist":
+        return data.get("tracks") or data.get("data") or []
+    return None
 
 
 def fmt_time(ms: int) -> str:
@@ -412,15 +477,31 @@ class Music(commands.Cog):
             "op": 4,
             "d": {"guild_id": str(inter.guild.id), "channel_id": str(inter.author.voice.channel.id), "self_mute": False, "self_deaf": False}
         })
-        if not player.current:
-            player.current = track
-            player.position = 0
-            player._pending_track = track
+
+        added_count = 0
+        if isinstance(track, list):
+            if not player.current:
+                player.current = track.pop(0)
+                player.position = 0
+                player._pending_track = player.current
+                added_count = len(track) + 1
+                player.queue.extend(track)
+            else:
+                player.queue.extend(track)
+                added_count = len(track)
         else:
-            player.queue.append(track)
+            if not player.current:
+                player.current = track
+                player.position = 0
+                player._pending_track = track
+            else:
+                player.queue.append(track)
+            added_count = 1
+
         idle_since.pop(inter.guild.id, None)
 
-        log.info(f"[{inter.guild.name}] Трек: {track.get('info', {}).get('title')} ({inter.author})")
+        current_title = player.current.get('info', {}).get('title') if player.current else 'Неизвестно'
+        log.info(f"[{inter.guild.name}] Музыка: {current_title} ({inter.author}) | добавлено: {added_count}")
 
         if player.message:
             try:
@@ -429,6 +510,8 @@ class Music(commands.Cog):
                 pass
 
         player.message = await inter.edit_original_response(embed=build_embed(player), view=MusicView(inter.guild.id))
+        if added_count > 1:
+            await inter.followup.send(f"✅ В очередь добавлено **{added_count}** треков.", ephemeral=True)
         # Закрепляем сообщение плеера и удаляем системное уведомление о закрепе
         try:
             await player.message.pin()

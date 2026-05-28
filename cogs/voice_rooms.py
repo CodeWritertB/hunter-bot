@@ -25,6 +25,7 @@ PRESET_NAMES = [
     "Minecraft",
     "Battlefield",
     "Elden Ring",
+    "Forza Horizon 6",
 ]
 
 

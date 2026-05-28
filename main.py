@@ -85,7 +85,7 @@ async def status_loop():
     await bot.wait_until_ready()
     while not bot.is_closed():
         try:
-            active_rooms = len(panel_messages)
+            active_rooms = sum(1 for cid in panel_messages if bot.get_channel(cid))
 
             # Считаем сколько человек сейчас в приватных комнатах
             people_in_rooms = sum(
@@ -108,8 +108,9 @@ async def status_loop():
                     activity=disnake.Activity(type=disnake.ActivityType.listening, name=current_track)
                 )
             else:
+                room_word = "комната" if active_rooms == 1 else "комнаты" if 2 <= active_rooms <= 4 else "комнат"
                 statuses = [
-                    (disnake.ActivityType.watching, f"{active_rooms} комнат | {people_in_rooms} человек в комнатах"),
+                    (disnake.ActivityType.watching, f"🎧 {active_rooms} {room_word} | 👥 {people_in_rooms} человек"),
                 ]
                 atype, text = statuses[idx % len(statuses)]
                 await bot.change_presence(activity=disnake.Activity(type=atype, name=text))
