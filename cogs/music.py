@@ -1,25 +1,19 @@
 import asyncio
-import json
 import logging
 import os
 import re
-import aiohttp
+
 import disnake
 from disnake.ext import commands
 from yt_dlp import YoutubeDL
+from yt_dlp.utils import DownloadError
+
 from db.database import get_music_channel, set_music_channel as db_set_music_channel
 
 log = logging.getLogger("cogs.music")
-
-LAVALINK_HOST = os.getenv("LAVALINK_HOST", "").strip()
-LAVALINK_PORT = int(os.getenv("LAVALINK_PORT", "2333"))
-LAVALINK_PASSWORD = os.getenv("LAVALINK_PASSWORD", "")
-LAVALINK_SECURE = os.getenv("LAVALINK_SECURE", "false").strip().lower() in {"1", "true", "yes"}
-
-LAVALINK_BASE = f"{'https' if LAVALINK_SECURE else 'http'}://{LAVALINK_HOST}:{LAVALINK_PORT}"
-LAVALINK_HEADERS = {"Authorization": LAVALINK_PASSWORD, "Content-Type": "application/json"}
-
-music_cog_session: str | None = None
+FFMPEG_EXECUTABLE = os.getenv("FFMPEG_PATH", "ffmpeg").strip() or "ffmpeg"
+MAX_PLAYLIST_TRACKS = 50
+IDLE_TIMEOUT = 300
 
 
 def is_spotify_url(query: str) -> bool:
@@ -32,24 +26,61 @@ def format_search_query(info: dict) -> str:
     return f"{title} {artist}".strip()
 
 
-async def extract_spotify_items(query: str) -> list[str] | None:
-    def _extract():
-        with YoutubeDL({"quiet": True, "no_warnings": True, "extract_flat": True}) as ydl:
-            return ydl.extract_info(query, download=False)
+def _extract_info(query: str, *, flat: bool = False) -> dict | None:
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": not flat,
+        "playlistend": MAX_PLAYLIST_TRACKS,
+        "extract_flat": "in_playlist" if flat else False,
+    }
+    if not flat:
+        options["format"] = "bestaudio/best"
+    with YoutubeDL(options) as ydl:
+        return ydl.extract_info(query, download=False)
 
+
+def _track_from_info(info: dict) -> dict | None:
+    if not info:
+        return None
+    track_id = info.get("id")
+    uri = (
+        info.get("webpage_url")
+        or info.get("original_url")
+        or info.get("url")
+    )
+    if uri and track_id and not uri.startswith(("http://", "https://")):
+        uri = f"https://www.youtube.com/watch?v={track_id}"
+    if not uri:
+        return None
+
+    duration = info.get("duration") or 0
+    return {
+        "info": {
+            "title": info.get("title") or "Неизвестный трек",
+            "uri": uri,
+            "length": int(duration * 1000),
+        }
+    }
+
+
+async def extract_spotify_items(query: str) -> list[str] | None:
     try:
-        info = await asyncio.to_thread(_extract)
-    except Exception:
+        info = await asyncio.to_thread(_extract_info, query, flat=True)
+    except DownloadError:
+        log.warning("Не удалось получить метаданные Spotify-ссылки")
         return None
 
     if not info:
         return None
-
     if info.get("_type") in {"playlist", "multi_video"} or info.get("entries"):
-        entries = info.get("entries", [])
-        return [format_search_query(entry) for entry in entries if entry]
-
-    return [format_search_query(info)]
+        return [
+            formatted
+            for entry in (info.get("entries") or [])[:MAX_PLAYLIST_TRACKS]
+            if entry and (formatted := format_search_query(entry))
+        ]
+    formatted = format_search_query(info)
+    return [formatted] if formatted else None
 
 
 async def search_track(query: str) -> dict | list[dict] | None:
@@ -57,46 +88,55 @@ async def search_track(query: str) -> dict | list[dict] | None:
         items = await extract_spotify_items(query)
         if not items:
             return None
-
-        tracks = []
-        for item in items[:50]:
+        tracks: list[dict] = []
+        for item in items[:MAX_PLAYLIST_TRACKS]:
             result = await search_track(item)
             if isinstance(result, list):
                 tracks.extend(result)
             elif result:
                 tracks.append(result)
-        return tracks if tracks else None
+            if len(tracks) >= MAX_PLAYLIST_TRACKS:
+                break
+        return tracks[:MAX_PLAYLIST_TRACKS] or None
 
-    if not query.lower().startswith("http"):
-        query = f"ytsearch:{query}"
-
-    data = await lavalink_request("GET", "/v4/loadtracks", params={"identifier": query})
-    if not data:
+    identifier = query if query.startswith(("http://", "https://")) else f"ytsearch1:{query}"
+    try:
+        info = await asyncio.to_thread(_extract_info, identifier, flat=True)
+    except DownloadError:
+        log.warning("yt-dlp не смог найти трек по запросу")
         return None
 
-    lt = data.get("loadType")
-    if lt == "track":
-        return data.get("data")
-    if lt == "search":
-        tracks = data.get("data", [])
-        return tracks[0] if tracks else None
-    if lt == "playlist":
-        return data.get("tracks") or data.get("data") or []
-    return None
+    if not info:
+        return None
+    if info.get("_type") in {"playlist", "multi_video"} or info.get("entries"):
+        tracks = [
+            track
+            for entry in (info.get("entries") or [])[:MAX_PLAYLIST_TRACKS]
+            if entry and (track := _track_from_info(entry))
+        ]
+        return tracks or None
+    return _track_from_info(info)
+
+
+def _resolve_audio_url(uri: str) -> str:
+    info = _extract_info(uri)
+    if info and info.get("entries"):
+        info = next((entry for entry in info["entries"] if entry), None)
+    if not info or not info.get("url"):
+        raise DownloadError("yt-dlp не вернул прямой URL аудиопотока")
+    return info["url"]
 
 
 def fmt_time(ms: int) -> str:
-    """Форматирует миллисекунды в MM:SS."""
-    s = ms // 1000
-    return f"{s // 60}:{s % 60:02d}"
+    seconds = max(ms, 0) // 1000
+    return f"{seconds // 60}:{seconds % 60:02d}"
 
 
 def progress_bar(position: int, duration: int, length: int = 12) -> str:
-    """Строит текстовый прогресс-бар."""
-    if not duration:
+    if duration <= 0:
         return "─" * length
-    filled = int(position / duration * length)
-    return "▬" * filled + "🔘" + "─" * (length - filled)
+    filled = max(0, min(length, int(position / duration * length)))
+    return "▬" * filled + ("🔘" if filled < length else "") + "─" * max(0, length - filled - 1)
 
 
 class MusicPlayer:
@@ -104,33 +144,22 @@ class MusicPlayer:
         self.queue: list[dict] = []
         self.current: dict | None = None
         self.message: disnake.Message | None = None
-        self.paused: bool = False
-        self.position: int = 0       # текущая позиция в мс
-        self.session_id: str | None = None
+        self.paused = False
+        self.position = 0
+        self.voice_channel_id: int | None = None
+        self.started_at = 0.0
+        self.idle_since: float | None = None
+        self.generation = 0
+        self.lock = asyncio.Lock()
 
 
 players: dict[int, MusicPlayer] = {}
-# guild_id -> timestamp когда трек закончился/встал на паузу
-idle_since: dict[int, float] = {}
-IDLE_TIMEOUT = 300  # 5 минут
 
 
 def get_player(guild_id: int) -> MusicPlayer:
     if guild_id not in players:
         players[guild_id] = MusicPlayer()
     return players[guild_id]
-
-
-async def lavalink_request(method: str, path: str, **kwargs):
-    async with aiohttp.ClientSession() as session:
-        async with session.request(method, f"{LAVALINK_BASE}{path}", headers=LAVALINK_HEADERS, **kwargs) as r:
-            if r.status in (200, 204):
-                try:
-                    return await r.json()
-                except Exception:
-                    return None
-            log.warning(f"Lavalink {r.status}: {await r.text()}")
-            return None
 
 
 def build_embed(player: MusicPlayer) -> disnake.Embed:
@@ -140,22 +169,18 @@ def build_embed(player: MusicPlayer) -> disnake.Embed:
         title = info.get("title", "Неизвестно")
         uri = info.get("uri", "")
         duration = info.get("length", 0)
-        pos = player.position
-
-        bar = progress_bar(pos, duration)
-        time_str = f"`{fmt_time(pos)} {bar} {fmt_time(duration)}`"
         status = "⏸ Пауза" if player.paused else "▶️ Играет"
-
+        progress = f"`{fmt_time(player.position)} {progress_bar(player.position, duration)} {fmt_time(duration)}`"
         embed.add_field(
             name=f"{status} — [{title}]({uri})" if uri else f"{status} — {title}",
-            value=time_str,
-            inline=False
+            value=progress,
+            inline=False,
         )
     else:
         embed.add_field(name="Сейчас играет", value="Ничего", inline=False)
 
     if player.queue:
-        lines = [f"{i+1}. {t.get('info', {}).get('title', '?')}" for i, t in enumerate(player.queue[:5])]
+        lines = [f"{i + 1}. {track.get('info', {}).get('title', '?')}" for i, track in enumerate(player.queue[:5])]
         if len(player.queue) > 5:
             lines.append(f"...и ещё {len(player.queue) - 5}")
         embed.add_field(name="Очередь", value="\n".join(lines), inline=False)
@@ -166,272 +191,207 @@ def build_embed(player: MusicPlayer) -> disnake.Embed:
 
 class MusicView(disnake.ui.View):
     def __init__(self, guild_id: int):
-        super().__init__(timeout=None)
+        super().__init__(timeout=1800)
         self.guild_id = guild_id
         self._update_pause_button()
 
     def _update_pause_button(self):
-        """Обновляет кнопку паузы в зависимости от состояния."""
         player = players.get(self.guild_id)
         paused = player.paused if player else False
-        # Находим кнопку паузы и меняем emoji
         for item in self.children:
-            if hasattr(item, "custom_id") and item.custom_id == "pause_toggle":
+            if getattr(item, "custom_id", None) == "pause_toggle":
                 item.emoji = "▶️" if paused else "⏸"
                 item.style = disnake.ButtonStyle.success if paused else disnake.ButtonStyle.secondary
                 break
 
     @disnake.ui.button(emoji="⏸", style=disnake.ButtonStyle.secondary, custom_id="pause_toggle")
-    async def pause_toggle(self, button, inter: disnake.MessageInteraction):
+    async def pause_toggle(self, _button: disnake.ui.Button, inter: disnake.MessageInteraction):
         player = get_player(self.guild_id)
-        player.paused = not player.paused
-        await lavalink_request(
-            "PATCH", f"/v4/sessions/{music_cog_session}/players/{self.guild_id}",
-            json={"paused": player.paused}
-        )
+        voice = inter.guild.voice_client if inter.guild else None
+        if not player.current or not voice or not voice.is_connected():
+            return await inter.response.send_message("Сейчас ничего не воспроизводится.", ephemeral=True)
+
+        if voice.is_paused():
+            voice.resume()
+            player.paused = False
+            player.started_at = asyncio.get_running_loop().time() - player.position / 1000
+        elif voice.is_playing():
+            player.position = Music.current_position(player)
+            voice.pause()
+            player.paused = True
         self._update_pause_button()
         await inter.response.edit_message(embed=build_embed(player), view=self)
 
-    @disnake.ui.button(emoji="⏭", style=disnake.ButtonStyle.secondary)
-    async def skip_btn(self, button, inter: disnake.MessageInteraction):
-        player = get_player(self.guild_id)
-        if player.queue:
-            player.current = player.queue.pop(0)
-            player.position = 0
-            await lavalink_request(
-                "PATCH", f"/v4/sessions/{music_cog_session}/players/{self.guild_id}",
-                json={"track": {"encoded": player.current.get("encoded")}}
-            )
-        else:
-            player.current = None
-        await inter.response.edit_message(embed=build_embed(player), view=self)
+    @disnake.ui.button(emoji="⏭", style=disnake.ButtonStyle.secondary, custom_id="music_skip")
+    async def skip_btn(self, _button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        voice = inter.guild.voice_client if inter.guild else None
+        if not voice or not voice.is_playing() and not voice.is_paused():
+            return await inter.response.send_message("Сейчас нечего пропускать.", ephemeral=True)
+        voice.stop()
+        await inter.response.defer()
 
-    @disnake.ui.button(emoji="⏹", style=disnake.ButtonStyle.danger)
-    async def stop_btn(self, button, inter: disnake.MessageInteraction):
+    @disnake.ui.button(emoji="⏹", style=disnake.ButtonStyle.danger, custom_id="music_stop")
+    async def stop_btn(self, _button: disnake.ui.Button, inter: disnake.MessageInteraction):
         player = get_player(self.guild_id)
+        player.generation += 1
         player.queue.clear()
         player.current = None
         player.position = 0
-        await lavalink_request("DELETE", f"/v4/sessions/{music_cog_session}/players/{self.guild_id}")
-        # Отключаемся от войса через Discord gateway
-        await inter.bot.ws.send_as_json({
-            "op": 4,
-            "d": {"guild_id": str(self.guild_id), "channel_id": None, "self_mute": False, "self_deaf": False}
-        })
-        try:
-            await inter.message.unpin()
-        except Exception:
-            pass
+        player.paused = False
+        player.idle_since = asyncio.get_running_loop().time()
+        voice = inter.guild.voice_client if inter.guild else None
+        if voice:
+            voice.stop()
+            await voice.disconnect()
+        player.voice_channel_id = None
         await inter.response.edit_message(embed=build_embed(player), view=None)
 
 
 class Music(commands.Cog):
     def __init__(self, bot: commands.InteractionBot):
         self.bot = bot
-        self.session_id: str | None = None
-        self.ws_task = bot.loop.create_task(self.connect_lavalink())
         self.update_task = bot.loop.create_task(self.progress_update_loop())
 
     def cog_unload(self):
-        self.ws_task.cancel()
         self.update_task.cancel()
 
+    @staticmethod
+    def current_position(player: MusicPlayer) -> int:
+        if player.paused or not player.current:
+            return player.position
+        elapsed = asyncio.get_running_loop().time() - player.started_at
+        position = max(0, int(elapsed * 1000))
+        duration = player.current["info"].get("length", 0)
+        return min(duration, position) if duration else position
+
+    async def update_player_message(self, player: MusicPlayer, *, active: bool):
+        if not player.message:
+            return
+        try:
+            await player.message.edit(
+                embed=build_embed(player),
+                view=MusicView(player.message.guild.id) if active and player.message.guild else None,
+            )
+        except (disnake.NotFound, disnake.Forbidden, disnake.HTTPException):
+            log.exception("Не удалось обновить сообщение музыкального плеера")
+
+    def schedule_track_end(self, guild_id: int, generation: int, error: Exception | None):
+        if error:
+            log.error("[guild=%s] Ошибка воспроизведения: %s", guild_id, error)
+        self.bot.loop.call_soon_threadsafe(
+            lambda: self.bot.loop.create_task(self.on_track_end(guild_id, generation))
+        )
+
+    async def on_track_end(self, guild_id: int, generation: int):
+        player = players.get(guild_id)
+        if not player or player.generation != generation:
+            return
+        player.current = None
+        player.position = 0
+        player.paused = False
+        await self.start_next_track(guild_id)
+
+    async def start_next_track(self, guild_id: int) -> bool:
+        player = get_player(guild_id)
+        async with player.lock:
+            guild = self.bot.get_guild(guild_id)
+            voice = guild.voice_client if guild else None
+            if not guild or not voice or not voice.is_connected():
+                player.current = None
+                player.queue.clear()
+                await self.update_player_message(player, active=False)
+                return False
+
+            while player.queue:
+                track = player.queue.pop(0)
+                player.current = track
+                player.position = 0
+                player.paused = False
+                try:
+                    uri = track["info"]["uri"]
+                    audio_url = await asyncio.to_thread(_resolve_audio_url, uri)
+                    source = disnake.FFmpegOpusAudio(
+                        audio_url,
+                        executable=FFMPEG_EXECUTABLE,
+                        bitrate=128,
+                        before_options="-nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+                        options="-vn",
+                    )
+                    player.generation += 1
+                    generation = player.generation
+                    player.started_at = asyncio.get_running_loop().time()
+                    player.idle_since = None
+                    voice.play(
+                        source,
+                        after=lambda error: self.schedule_track_end(guild_id, generation, error),
+                    )
+                    log.info("[guild=%s] Запущен трек: %s", guild_id, track["info"]["title"])
+                    await self.update_player_message(player, active=True)
+                    return True
+                except (DownloadError, OSError, disnake.DiscordException):
+                    log.exception(
+                        "[guild=%s] Не удалось запустить трек: %s",
+                        guild_id,
+                        track.get("info", {}).get("title", "unknown"),
+                    )
+            player.current = None
+            player.position = 0
+            player.paused = False
+            player.idle_since = asyncio.get_running_loop().time()
+            await self.update_player_message(player, active=False)
+            return False
+
     async def progress_update_loop(self):
-        """Обновляет прогресс-бар каждые 10 секунд и отключается при простое 5 минут."""
         await self.bot.wait_until_ready()
         while not self.bot.is_closed():
             await asyncio.sleep(10)
-            if not self.session_id:
-                continue
-            now = asyncio.get_event_loop().time()
+            now = asyncio.get_running_loop().time()
             for guild_id, player in list(players.items()):
-                # Отслеживаем простой
-                if not player.current or player.paused:
-                    if guild_id not in idle_since:
-                        idle_since[guild_id] = now
-                    elif now - idle_since[guild_id] >= IDLE_TIMEOUT:
-                        # Тайм-аут — отключаемся
-                        idle_since.pop(guild_id, None)
-                        await lavalink_request("DELETE", f"/v4/sessions/{self.session_id}/players/{guild_id}")
-                        await self.bot.ws.send_as_json({
-                            "op": 4,
-                            "d": {"guild_id": str(guild_id), "channel_id": None, "self_mute": False, "self_deaf": False}
-                        })
-                        if player.message:
-                            try:
-                                await player.message.unpin()
-                                await player.message.edit(embed=build_embed(player), view=None)
-                            except Exception:
-                                pass
-                        player.current = None
-                        player.queue.clear()
-                        log.info(f"[guild={guild_id}] Отключён по тайм-ауту простоя")
+                guild = self.bot.get_guild(guild_id)
+                voice = guild.voice_client if guild else None
+                if not player.current:
+                    if player.idle_since is None:
+                        player.idle_since = now
+                    elif now - player.idle_since >= IDLE_TIMEOUT:
+                        if voice and voice.is_connected():
+                            await voice.disconnect()
+                        player.voice_channel_id = None
+                        player.idle_since = None
                     continue
-                else:
-                    idle_since.pop(guild_id, None)
-
-                if not player.message:
-                    continue
-                try:
-                    view = MusicView(guild_id)
-                    await player.message.edit(embed=build_embed(player), view=view)
-                except Exception:
-                    pass
-
-    async def connect_lavalink(self):
-        global music_cog_session
-        await self.bot.wait_until_ready()
-        if not LAVALINK_HOST or not LAVALINK_PASSWORD:
-            log.warning("Музыка отключена: задайте LAVALINK_HOST и LAVALINK_PASSWORD в .env")
-            return
-        ws_url = f"{'wss' if LAVALINK_SECURE else 'ws'}://{LAVALINK_HOST}:{LAVALINK_PORT}/v4/websocket"
-        headers = {
-            "Authorization": LAVALINK_PASSWORD,
-            "User-Id": str(self.bot.user.id),
-            "Client-Name": "HunterBot/1.0",
-        }
-        while not self.bot.is_closed():
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.ws_connect(ws_url, headers=headers) as ws:
-                        log.info("Подключён к Lavalink")
-                        async for msg in ws:
-                            if msg.type == aiohttp.WSMsgType.TEXT:
-                                await self.handle_event(msg.json())
-                            elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
-                                break
-            except Exception as e:
-                log.warning(f"Lavalink WS ошибка: {e}, переподключение через 5 сек")
-                await asyncio.sleep(5)
-
-    async def handle_event(self, data: dict):
-        global music_cog_session
-        op = data.get("op")
-        if op == "ready":
-            self.session_id = data.get("sessionId")
-            music_cog_session = self.session_id
-            log.info(f"Lavalink session: {self.session_id}")
-            for p in players.values():
-                p.session_id = self.session_id
-
-        elif op == "playerUpdate":
-            guild_id = int(data.get("guildId", 0))
-            player = players.get(guild_id)
-            if player:
-                player.position = data.get("state", {}).get("position", 0)
-
-        elif op == "event":
-            event_type = data.get("type")
-            guild_id = int(data.get("guildId", 0))
-            player = players.get(guild_id)
-            if not player:
-                return
-            if event_type == "TrackEndEvent" and data.get("reason") == "finished":
-                if player.queue:
-                    player.current = player.queue.pop(0)
-                    player.position = 0
-                    await lavalink_request(
-                        "PATCH", f"/v4/sessions/{self.session_id}/players/{guild_id}",
-                        json={"track": {"encoded": player.current.get("encoded")}}
-                    )
-                else:
-                    player.current = None
-                    player.position = 0
-                if player.message:
-                    try:
-                        await player.message.edit(embed=build_embed(player), view=MusicView(guild_id) if player.current else None)
-                    except Exception:
-                        pass
+                if voice and voice.is_playing():
+                    player.position = self.current_position(player)
+                    await self.update_player_message(player, active=True)
 
     @commands.Cog.listener()
-    async def on_voice_state_update(self, member: disnake.Member, before: disnake.VoiceState, after: disnake.VoiceState):
-        """Останавливает музыку если в канале никого не осталось."""
-        if member.bot:
+    async def on_voice_state_update(
+        self,
+        member: disnake.Member,
+        before: disnake.VoiceState,
+        _after: disnake.VoiceState,
+    ):
+        if member.bot or not before.channel:
             return
-        if not before.channel:
-            return
-        # Проверяем есть ли плеер для этого сервера
         player = players.get(member.guild.id)
-        if not player or not player.current:
+        if not player or not player.current or before.channel.id != player.voice_channel_id:
             return
-        channel_id = getattr(player, "_voice_channel_id", None)
-        if not channel_id or before.channel.id != int(channel_id):
-            return
-        # Считаем живых участников (не ботов)
-        humans = [m for m in before.channel.members if not m.bot]
-        if len(humans) == 0:
+        remaining_humans = [voice_member for voice_member in before.channel.members if voice_member.id != member.id and not voice_member.bot]
+        if not remaining_humans:
+            player.generation += 1
             player.queue.clear()
             player.current = None
             player.position = 0
-            if self.session_id:
-                await lavalink_request("DELETE", f"/v4/sessions/{self.session_id}/players/{member.guild.id}")
-            await self.bot.ws.send_as_json({
-                "op": 4,
-                "d": {"guild_id": str(member.guild.id), "channel_id": None, "self_mute": False, "self_deaf": False}
-            })
-            if player.message:
-                try:
-                    await player.message.unpin()
-                    await player.message.edit(embed=build_embed(player), view=None)
-                except Exception:
-                    pass
-            log.info(f"[{member.guild.name}] Канал пуст — музыка остановлена")
-
-    @commands.Cog.listener()
-    async def on_socket_raw_receive(self, msg: str):
-        try:
-            data = json.loads(msg)
-        except Exception:
-            return
-        t = data.get("t")
-        d = data.get("d") or {}
-        if not self.session_id:
-            return
-        guild_id = int(d.get("guild_id", 0) or 0)
-        if not guild_id:
-            return
-        player = players.get(guild_id)
-        if not player:
-            return
-        if t == "VOICE_STATE_UPDATE" and str(d.get("user_id")) == str(self.bot.user.id):
-            player._voice_session_id = d.get("session_id")
-            player._voice_channel_id = d.get("channel_id")
-            await self._send_voice_update(guild_id, player)
-        elif t == "VOICE_SERVER_UPDATE":
-            player._voice_token = d.get("token")
-            player._voice_endpoint = d.get("endpoint", "")
-            await self._send_voice_update(guild_id, player)
-
-    async def _send_voice_update(self, guild_id: int, player):
-        token = getattr(player, "_voice_token", None)
-        endpoint = getattr(player, "_voice_endpoint", None)
-        session_id = getattr(player, "_voice_session_id", None)
-        if not all([token, endpoint, session_id]):
-            return
-        channel_id = getattr(player, "_voice_channel_id", None)
-        pending = getattr(player, "_pending_track", None)
-        voice_data = {"token": token, "endpoint": endpoint, "sessionId": session_id, "channelId": str(channel_id) if channel_id else None}
-        if pending:
-            player._pending_track = None
-            result = await lavalink_request(
-                "PATCH", f"/v4/sessions/{self.session_id}/players/{guild_id}",
-                json={"voice": voice_data, "track": {"encoded": pending.get("encoded")}},
-                params={"noReplace": "false"}
-            )
-            if result:
-                log.info(f"[guild={guild_id}] Трек запущен в Lavalink")
-        else:
-            await lavalink_request(
-                "PATCH", f"/v4/sessions/{self.session_id}/players/{guild_id}",
-                json={"voice": voice_data},
-                params={"noReplace": "false"}
-            )
-        player._voice_token = None
-        player._voice_endpoint = None
+            voice = member.guild.voice_client
+            if voice:
+                voice.stop()
+                await voice.disconnect()
+            player.voice_channel_id = None
+            player.idle_since = asyncio.get_running_loop().time()
+            await self.update_player_message(player, active=False)
+            log.info("[%s] Канал пуст — музыка остановлена", member.guild.name)
 
     @commands.slash_command(
         description="Установить канал для музыкального плеера",
-        default_member_permissions=disnake.Permissions(administrator=True)
+        default_member_permissions=disnake.Permissions(administrator=True),
     )
     async def set_music_channel(self, inter: disnake.ApplicationCommandInteraction, channel: disnake.TextChannel):
         db_set_music_channel(inter.guild.id, channel.id)
@@ -439,78 +399,86 @@ class Music(commands.Cog):
 
     @commands.slash_command(description="Воспроизвести трек в голосовом канале")
     async def music(self, inter: disnake.ApplicationCommandInteraction, query: str):
-        music_ch_id = get_music_channel(inter.guild.id)
-        if music_ch_id and inter.channel.id != music_ch_id:
-            ch = inter.guild.get_channel(music_ch_id)
-            return await inter.response.send_message(f"❌ Используй команду в {ch.mention}.", ephemeral=True)
-        if not inter.author.voice:
+        music_channel_id = get_music_channel(inter.guild.id)
+        if music_channel_id and inter.channel.id != music_channel_id:
+            channel = inter.guild.get_channel(music_channel_id)
+            return await inter.response.send_message(
+                f"❌ Используй команду в {channel.mention if channel else 'настроенном музыкальном канале'}.",
+                ephemeral=True,
+            )
+        if not inter.author.voice or not inter.author.voice.channel:
             return await inter.response.send_message("❌ Зайди в голосовой канал.", ephemeral=True)
-        if not self.session_id:
-            return await inter.response.send_message("❌ Lavalink не подключён.", ephemeral=True)
 
         await inter.response.defer()
-        track = await search_track(query)
-        if not track:
-            msg = await inter.edit_original_response(content="❌ Трек не найден.")
-            await asyncio.sleep(5)
-            try:
-                await msg.delete()
-            except Exception:
-                pass
-            return
+        result = await search_track(query)
+        tracks = result if isinstance(result, list) else [result] if result else []
+        if not tracks:
+            return await inter.edit_original_response(content="❌ Не удалось найти трек. Проверь ссылку или запрос.")
 
         player = get_player(inter.guild.id)
-        player.session_id = self.session_id
-
-        await self.bot.ws.send_as_json({
-            "op": 4,
-            "d": {"guild_id": str(inter.guild.id), "channel_id": str(inter.author.voice.channel.id), "self_mute": False, "self_deaf": False}
-        })
-
-        added_count = 0
-        if isinstance(track, list):
-            if not player.current:
-                player.current = track.pop(0)
-                player.position = 0
-                player._pending_track = player.current
-                added_count = len(track) + 1
-                player.queue.extend(track)
+        voice = inter.guild.voice_client
+        try:
+            if voice and voice.is_connected():
+                if voice.channel.id != inter.author.voice.channel.id:
+                    if player.current:
+                        return await inter.edit_original_response(
+                            content=f"❌ Бот уже воспроизводит музыку в {voice.channel.mention}."
+                        )
+                    await voice.move_to(inter.author.voice.channel)
             else:
-                player.queue.extend(track)
-                added_count = len(track)
-        else:
-            if not player.current:
-                player.current = track
-                player.position = 0
-                player._pending_track = track
-            else:
-                player.queue.append(track)
-            added_count = 1
+                voice = await inter.author.voice.channel.connect()
+        except (disnake.Forbidden, disnake.ClientException, disnake.HTTPException):
+            log.exception("[%s] Не удалось подключиться к голосовому каналу", inter.guild.name)
+            return await inter.edit_original_response(
+                content="❌ Не удалось подключиться к голосовому каналу. Проверь права бота и настройки голоса на хосте."
+            )
 
-        idle_since.pop(inter.guild.id, None)
-
-        current_title = player.current.get('info', {}).get('title') if player.current else 'Неизвестно'
-        log.info(f"[{inter.guild.name}] Музыка: {current_title} ({inter.author}) | добавлено: {added_count}")
-
+        player.voice_channel_id = inter.author.voice.channel.id
+        was_playing = player.current is not None
+        player.queue.extend(tracks)
+        player.idle_since = None
         if player.message:
             try:
                 await player.message.delete()
-            except Exception:
-                pass
+            except (disnake.NotFound, disnake.Forbidden, disnake.HTTPException):
+                log.warning("Не удалось удалить старое сообщение музыкального плеера")
+        player.message = await inter.edit_original_response(
+            content=None,
+            embed=build_embed(player),
+            view=MusicView(inter.guild.id),
+        )
 
-        player.message = await inter.edit_original_response(embed=build_embed(player), view=MusicView(inter.guild.id))
-        if added_count > 1:
-            await inter.followup.send(f"✅ В очередь добавлено **{added_count}** треков.", ephemeral=True)
-        # Закрепляем сообщение плеера и удаляем системное уведомление о закрепе
+        if not was_playing:
+            if not await self.start_next_track(inter.guild.id):
+                return await inter.edit_original_response(
+                    content=(
+                        "❌ Не удалось запустить аудио. Проверьте, что FFmpeg установлен на хосте "
+                        f"(исполняемый файл: `{FFMPEG_EXECUTABLE}`) и ссылка доступна."
+                    ),
+                    embed=None,
+                    view=None,
+                )
+        added_count = len(tracks)
+        log.info(
+            "[%s] Музыка запрошена пользователем %s; добавлено в очередь: %s",
+            inter.guild.name,
+            inter.author,
+            added_count,
+        )
+        if was_playing:
+            await inter.edit_original_response(
+                content=f"✅ В очередь добавлено **{added_count}** трек(ов).",
+                embed=build_embed(player),
+                view=MusicView(inter.guild.id),
+            )
         try:
             await player.message.pin()
-            # Удаляем системное сообщение "закрепил сообщение"
-            async for msg in inter.channel.history(limit=5):
-                if msg.type == disnake.MessageType.pins_add:
-                    await msg.delete()
+            async for message in inter.channel.history(limit=5):
+                if message.type == disnake.MessageType.pins_add:
+                    await message.delete()
                     break
-        except Exception:
-            pass
+        except (disnake.Forbidden, disnake.HTTPException):
+            log.debug("Не удалось закрепить сообщение плеера", exc_info=True)
 
 
 def setup(bot: commands.InteractionBot):
