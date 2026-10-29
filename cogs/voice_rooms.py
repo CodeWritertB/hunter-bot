@@ -255,7 +255,7 @@ class RoomPanel(disnake.ui.View):
         return inter.author.id == self.owner.id
 
     # Ряд 1
-    @disnake.ui.button(label="Название", emoji="✏️", style=disnake.ButtonStyle.secondary, row=0)
+    @disnake.ui.button(label="Название", emoji="✏️", style=disnake.ButtonStyle.secondary, custom_id="room_name", row=0)
     async def name_btn(self, button, inter: disnake.MessageInteraction):
         if not self.check(inter):
             return await inter.response.send_message("❌ Только владелец.", ephemeral=True)
@@ -266,13 +266,13 @@ class RoomPanel(disnake.ui.View):
         )
         await inter.response.send_message(embed=embed, view=NameSelectView(self.vc, self.owner), ephemeral=True)
 
-    @disnake.ui.button(label="Лимит", emoji="👥", style=disnake.ButtonStyle.secondary, row=0)
+    @disnake.ui.button(label="Лимит", emoji="👥", style=disnake.ButtonStyle.secondary, custom_id="room_limit", row=0)
     async def limit_btn(self, button, inter: disnake.MessageInteraction):
         if not self.check(inter):
             return await inter.response.send_message("❌ Только владелец.", ephemeral=True)
         await inter.response.send_modal(LimitModal(self.vc, self.owner))
 
-    @disnake.ui.button(label="Видимость", emoji="👁", style=disnake.ButtonStyle.secondary, row=0)
+    @disnake.ui.button(label="Видимость", emoji="👁", style=disnake.ButtonStyle.secondary, custom_id="room_visibility", row=0)
     async def visibility_btn(self, button, inter: disnake.MessageInteraction):
         if not self.check(inter):
             return await inter.response.send_message("❌ Только владелец.", ephemeral=True)
@@ -286,7 +286,7 @@ class RoomPanel(disnake.ui.View):
         embed.add_field(name="Текущий статус", value="🙈 Скрыта" if hidden else "👁 Видна")
         await inter.response.send_message(embed=embed, view=VisibilityView(self.vc, self.owner), ephemeral=True)
 
-    @disnake.ui.button(label="Владелец", emoji="👑", style=disnake.ButtonStyle.primary, row=0)
+    @disnake.ui.button(label="Владелец", emoji="👑", style=disnake.ButtonStyle.primary, custom_id="room_owner", row=0)
     async def owner_btn(self, button, inter: disnake.MessageInteraction):
         if not self.check(inter):
             return await inter.response.send_message("❌ Только владелец.", ephemeral=True)
@@ -301,7 +301,7 @@ class RoomPanel(disnake.ui.View):
         await inter.response.send_message(embed=embed, view=TransferView(self.vc, self.owner), ephemeral=True)
 
     # Ряд 2
-    @disnake.ui.button(label="Видео", emoji="📹", style=disnake.ButtonStyle.secondary, row=1)
+    @disnake.ui.button(label="Видео", emoji="📹", style=disnake.ButtonStyle.secondary, custom_id="room_video", row=1)
     async def video_btn(self, button, inter: disnake.MessageInteraction):
         if not self.check(inter):
             return await inter.response.send_message("❌ Только владелец.", ephemeral=True)
@@ -315,7 +315,7 @@ class RoomPanel(disnake.ui.View):
             await msg.edit(embed=build_panel_embed(self.vc, self.owner))
         await inter.response.send_message(status, ephemeral=True)
 
-    @disnake.ui.button(label="Voice", emoji="🎤", style=disnake.ButtonStyle.secondary, row=1)
+    @disnake.ui.button(label="Voice", emoji="🎤", style=disnake.ButtonStyle.secondary, custom_id="room_voice", row=1)
     async def voice_btn(self, button, inter: disnake.MessageInteraction):
         if not self.check(inter):
             return await inter.response.send_message("❌ Только владелец.", ephemeral=True)
@@ -330,13 +330,13 @@ class RoomPanel(disnake.ui.View):
             await msg.edit(embed=build_panel_embed(self.vc, self.owner))
         await inter.response.send_message(status, ephemeral=True)
 
-    @disnake.ui.button(label="Баны", emoji="🔨", style=disnake.ButtonStyle.danger, row=1)
+    @disnake.ui.button(label="Баны", emoji="🔨", style=disnake.ButtonStyle.danger, custom_id="room_ban", row=1)
     async def ban_btn(self, button, inter: disnake.MessageInteraction):
         if not self.check(inter):
             return await inter.response.send_message("❌ Только владелец.", ephemeral=True)
         await inter.response.send_message("🔨 Выбери кого забанить:", view=MemberActionView(self.vc, self.owner, "ban"), ephemeral=True)
 
-    @disnake.ui.button(label="Поднять", emoji="⬆️", style=disnake.ButtonStyle.success, row=1)
+    @disnake.ui.button(label="Поднять", emoji="⬆️", style=disnake.ButtonStyle.success, custom_id="room_raise", row=1)
     async def raise_btn(self, button, inter: disnake.MessageInteraction):
         if not self.check(inter):
             return await inter.response.send_message("❌ Только владелец.", ephemeral=True)
@@ -347,7 +347,6 @@ class RoomPanel(disnake.ui.View):
             return await inter.response.send_message(
                 f"⏳ Поднять можно через **{int(remaining)}** сек.", ephemeral=True
             )
-        raise_cooldowns[self.vc.id] = now
         # Поднимаем канал вверх в категории, но не выше лобби
         try:
             lobby_id = get_lobby(self.vc.guild.id)
@@ -355,15 +354,20 @@ class RoomPanel(disnake.ui.View):
             if lobby and self.vc.category_id == lobby.category_id:
                 # Ставим сразу после лобби
                 await self.vc.edit(position=lobby.position + 1)
-            else:
+            elif self.vc.category:
                 # Поднимаем на первое место в категории
                 category = self.vc.category
-                if category:
-                    channels = sorted(category.voice_channels, key=lambda c: c.position)
-                    if channels:
-                        await self.vc.edit(position=channels[0].position)
-        except Exception:
-            pass
+                channels = sorted(category.voice_channels, key=lambda c: c.position)
+                if channels:
+                    await self.vc.edit(position=channels[0].position)
+                else:
+                    return await inter.response.send_message("❌ Не удалось определить порядок каналов.", ephemeral=True)
+            else:
+                return await inter.response.send_message("❌ Для комнаты не найдена категория.", ephemeral=True)
+        except (disnake.Forbidden, disnake.HTTPException):
+            log.exception("Не удалось переместить комнату %s", self.vc.id)
+            return await inter.response.send_message("❌ Не удалось переместить комнату.", ephemeral=True)
+        raise_cooldowns[self.vc.id] = now
         await inter.response.send_message("✅ Комната поднята.", ephemeral=True)
 
 
@@ -378,13 +382,16 @@ class VoiceRooms(commands.Cog):
         """При старте удаляем пустые временные каналы и восстанавливаем panel_messages."""
         from db.database import get_all_temp_channels
         for guild in self.bot.guilds:
+            owners = dict(get_all_temp_channels(guild.id))
             # Восстанавливаем panel_messages из БД
             for channel_id, message_id in get_all_panel_messages(guild.id):
                 vc = guild.get_channel(channel_id)
-                if vc:
+                owner = guild.get_member(owners.get(channel_id, 0))
+                if vc and owner:
                     try:
                         msg = await vc.fetch_message(message_id)
                         panel_messages[channel_id] = msg
+                        self.bot.add_view(RoomPanel(vc, owner), message_id=message_id)
                     except Exception:
                         remove_panel_message(channel_id)
 

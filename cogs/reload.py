@@ -8,7 +8,7 @@ COGS = [
     "cogs.members", "cogs.help", "cogs.music", "cogs.voice_rooms",
     "cogs.logger", "cogs.xp", "cogs.info", "cogs.verify",
     "cogs.streaks", "cogs.tracker", "cogs.backup", "cogs.dota",
-    "cogs.cs2", "cogs.gameserver", "cogs.admin_panel", "cogs.reload",
+    "cogs.cs2", "cogs.admin_panel", "cogs.reload",
     "cogs.autoupdate",
 ]
 

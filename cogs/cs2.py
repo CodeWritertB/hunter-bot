@@ -46,7 +46,8 @@ async def get_cs2_stats(session: aiohttp.ClientSession, steam64: str) -> dict | 
 
 # --- Faceit API ---
 
-FACEIT_HEADERS = lambda: {"Authorization": f"Bearer {FACEIT_API_KEY}"}
+def faceit_headers() -> dict[str, str]:
+    return {"Authorization": f"Bearer {FACEIT_API_KEY}"}
 
 
 async def get_faceit_player(session: aiohttp.ClientSession, steam64: str) -> dict | None:
@@ -54,7 +55,7 @@ async def get_faceit_player(session: aiohttp.ClientSession, steam64: str) -> dic
     async with session.get(
         f"{FACEIT_API}/players",
         params={"game": "cs2", "game_player_id": steam64},
-        headers=FACEIT_HEADERS()
+        headers=faceit_headers()
     ) as r:
         if r.status != 200:
             return None
@@ -65,7 +66,7 @@ async def get_faceit_stats(session: aiohttp.ClientSession, faceit_id: str) -> di
     """Получает статистику Faceit игрока по CS2."""
     async with session.get(
         f"{FACEIT_API}/players/{faceit_id}/stats/cs2",
-        headers=FACEIT_HEADERS()
+        headers=faceit_headers()
     ) as r:
         if r.status != 200:
             return None
@@ -77,7 +78,7 @@ async def get_faceit_match(session: aiohttp.ClientSession, faceit_id: str) -> di
     async with session.get(
         f"{FACEIT_API}/players/{faceit_id}/history",
         params={"game": "cs2", "limit": 1},
-        headers=FACEIT_HEADERS()
+        headers=faceit_headers()
     ) as r:
         if r.status != 200:
             return None
@@ -101,7 +102,7 @@ async def get_faceit_match_details(session: aiohttp.ClientSession, match_id: str
     """Получает детали матча Faceit."""
     async with session.get(
         f"{FACEIT_API}/matches/{match_id}",
-        headers=FACEIT_HEADERS()
+        headers=faceit_headers()
     ) as r:
         if r.status != 200:
             return None
@@ -165,6 +166,7 @@ def build_cs_finished_embed(match_id: str, players_info: list, match_data: dict 
     # Определяем победила ли команда привязанного игрока
     linked = [p for p in players_info if p.get("linked")]
     t1_ids = {p.get("player_id") for p in teams_data.get("faction1", {}).get("roster", [])}
+    linked_won = None
     if linked:
         first_linked_faction = "faction1" if linked[0].get("faceit_id") in t1_ids else "faction2"
         linked_won = first_linked_faction == winner_faction
@@ -172,8 +174,9 @@ def build_cs_finished_embed(match_id: str, players_info: list, match_data: dict 
     else:
         color = disnake.Color.blurple()
 
+    result_emoji = "🏁" if linked_won is None else "✅" if linked_won else "❌"
     embed = disnake.Embed(
-        title=f"{'✅' if linked_won else '❌'} Матч CS2 завершён — победил {winner_name}",
+        title=f"{result_emoji} Матч CS2 завершён — победил {winner_name}",
         color=color,
         url=f"https://www.faceit.com/en/cs2/room/{match_id}"
     )
@@ -257,6 +260,8 @@ class CS2(commands.Cog):
 
             if match_id != prev:
                 active_cs_matches[guild.id][faceit_id] = match_id
+                if match_id in live_cs_messages[guild.id]:
+                    continue
 
                 # Детали матча
                 match_data = await get_faceit_match_details(session, match_id)
@@ -303,7 +308,7 @@ class CS2(commands.Cog):
                             fplayer_data = None
                             async with session.get(
                                 f"{FACEIT_API}/players/{p_faceit_id}",
-                                headers=FACEIT_HEADERS()
+                                headers=faceit_headers()
                             ) as pr:
                                 if pr.status == 200:
                                     fplayer_data = await pr.json()
@@ -359,6 +364,8 @@ class CS2(commands.Cog):
     @commands.slash_command(description="Привязать Faceit аккаунт для CS2")
     async def link_cs(self, inter: disnake.ApplicationCommandInteraction, faceit_nickname: str):
         """Привязывает Faceit аккаунт по нику."""
+        if not FACEIT_API_KEY:
+            return await inter.response.send_message("❌ Faceit API ключ не настроен.", ephemeral=True)
         await inter.response.defer(ephemeral=True)
 
         async with aiohttp.ClientSession() as session:
@@ -366,7 +373,7 @@ class CS2(commands.Cog):
             async with session.get(
                 f"{FACEIT_API}/players",
                 params={"nickname": faceit_nickname},
-                headers=FACEIT_HEADERS()
+                headers=faceit_headers()
             ) as r:
                 if r.status != 200:
                     return await inter.edit_original_response(content="❌ Faceit аккаунт не найден.")
@@ -408,23 +415,26 @@ class CS2(commands.Cog):
 
             # Faceit статистика
             if faceit_id:
-                fplayer = await get_faceit_player(session, steam64) if steam64 else None
-                fstats = await get_faceit_stats(session, faceit_id)
+                if not FACEIT_API_KEY:
+                    embed.add_field(name="Faceit", value="FACEIT_API_KEY не настроен.", inline=False)
+                else:
+                    fplayer = await get_faceit_player(session, steam64) if steam64 else None
+                    fstats = await get_faceit_stats(session, faceit_id)
 
-                if fplayer:
-                    elo = fplayer.get("games", {}).get("cs2", {}).get("faceit_elo", "—")
-                    level = fplayer.get("games", {}).get("cs2", {}).get("skill_level", "—")
-                    embed.add_field(name="Faceit ELO", value=str(elo), inline=True)
-                    embed.add_field(name="Уровень", value=str(level), inline=True)
-                    embed.set_thumbnail(url=fplayer.get("avatar", ""))
+                    if fplayer:
+                        elo = fplayer.get("games", {}).get("cs2", {}).get("faceit_elo", "—")
+                        level = fplayer.get("games", {}).get("cs2", {}).get("skill_level", "—")
+                        embed.add_field(name="Faceit ELO", value=str(elo), inline=True)
+                        embed.add_field(name="Уровень", value=str(level), inline=True)
+                        embed.set_thumbnail(url=fplayer.get("avatar", ""))
 
-                if fstats:
-                    lifetime = fstats.get("lifetime", {})
-                    embed.add_field(name="Матчей", value=lifetime.get("Matches", "—"), inline=True)
-                    embed.add_field(name="Винрейт", value=f"{lifetime.get('Win Rate %', '—')}%", inline=True)
-                    embed.add_field(name="K/D", value=lifetime.get("Average K/D Ratio", "—"), inline=True)
-                    embed.add_field(name="HS%", value=f"{lifetime.get('Average Headshots %', '—')}%", inline=True)
-                    embed.add_field(name="Убийств/матч", value=lifetime.get("Average Kills", "—"), inline=True)
+                    if fstats:
+                        lifetime = fstats.get("lifetime", {})
+                        embed.add_field(name="Матчей", value=lifetime.get("Matches", "—"), inline=True)
+                        embed.add_field(name="Винрейт", value=f"{lifetime.get('Win Rate %', '—')}%", inline=True)
+                        embed.add_field(name="K/D", value=lifetime.get("Average K/D Ratio", "—"), inline=True)
+                        embed.add_field(name="HS%", value=f"{lifetime.get('Average Headshots %', '—')}%", inline=True)
+                        embed.add_field(name="Убийств/матч", value=lifetime.get("Average Kills", "—"), inline=True)
 
             # Steam статистика CS2
             if steam64:

@@ -75,6 +75,7 @@ cursor.executescript("""
         messages_count INTEGER DEFAULT 0,
         voice_minutes  INTEGER DEFAULT 0,
         last_seen      TEXT,
+        faceit_id      TEXT,
         PRIMARY KEY (guild_id, user_id)
     );
 
@@ -107,69 +108,37 @@ cursor.executescript("""
 conn.commit()
 
 # Добавляем новые колонки если их нет (миграция на месте)
-try:
-    cursor.execute("ALTER TABLE servers ADD COLUMN dota_channel_id INTEGER")
-    conn.commit()
-except Exception:
-    pass  # Колонка уже существует
+def ensure_column(table: str, column: str, definition: str):
+    columns = {row[1] for row in cursor.execute(f"PRAGMA table_info({table})")}
+    if column not in columns:
+        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
-try:
-    cursor.execute("ALTER TABLE servers ADD COLUMN cs_channel_id INTEGER")
-    conn.commit()
-except Exception:
-    pass
 
-try:
-    cursor.execute("ALTER TABLE servers ADD COLUMN cs_server_channel_id INTEGER")
-    conn.commit()
-except Exception:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE voice_streaks ADD COLUMN cold_streak INTEGER DEFAULT 0")
-    conn.commit()
-except Exception:
-    pass  # Колонка уже существует
-
-try:
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS panel_messages (
-            channel_id  INTEGER PRIMARY KEY,
-            guild_id    INTEGER NOT NULL,
-            message_id  INTEGER NOT NULL
-        )
-    """)
-    conn.commit()
-except Exception:
-    pass
-
-try:
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS processed_matches (
-            guild_id  INTEGER NOT NULL,
-            match_id  INTEGER NOT NULL,
-            PRIMARY KEY (guild_id, match_id)
-        )
-    """)
-    conn.commit()
-except Exception:
-    pass
-
-try:
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS dota_players (
-            guild_id     INTEGER NOT NULL,
-            user_id      INTEGER NOT NULL,
-            rank_tier    INTEGER DEFAULT 0,
-            matches_week INTEGER DEFAULT 0,
-            wins_week    INTEGER DEFAULT 0,
-            week_start   TEXT,
-            PRIMARY KEY (guild_id, user_id)
-        )
-    """)
-    conn.commit()
-except Exception:
-    pass
+ensure_column("servers", "dota_channel_id", "INTEGER")
+ensure_column("servers", "cs_channel_id", "INTEGER")
+ensure_column("voice_streaks", "cold_streak", "INTEGER DEFAULT 0")
+ensure_column("members", "faceit_id", "TEXT")
+cursor.execute(
+    "UPDATE members SET faceit_id = substr(username, 8) "
+    "WHERE username LIKE 'faceit:%' AND (faceit_id IS NULL OR faceit_id = '')"
+)
+cursor.executescript("""
+    CREATE TABLE IF NOT EXISTS processed_matches (
+        guild_id  INTEGER NOT NULL,
+        match_id  INTEGER NOT NULL,
+        PRIMARY KEY (guild_id, match_id)
+    );
+    CREATE TABLE IF NOT EXISTS dota_players (
+        guild_id     INTEGER NOT NULL,
+        user_id      INTEGER NOT NULL,
+        rank_tier    INTEGER DEFAULT 0,
+        matches_week INTEGER DEFAULT 0,
+        wins_week    INTEGER DEFAULT 0,
+        week_start   TEXT,
+        PRIMARY KEY (guild_id, user_id)
+    );
+""")
+conn.commit()
 
 
 # --- Вспомогательные функции ---
@@ -561,32 +530,31 @@ def link_faceit(guild_id: int, user_id: int, faceit_id: str, steam_id: str):
         "ON CONFLICT(guild_id, user_id) DO UPDATE SET steam_id=excluded.steam_id",
         (guild_id, user_id, steam_id)
     )
-    # Faceit ID храним отдельно через upsert_server-подобный механизм
     cursor.execute(
-        "INSERT INTO members (guild_id, user_id, username) VALUES (?, ?, ?) "
-        "ON CONFLICT(guild_id, user_id) DO UPDATE SET username=excluded.username",
-        (guild_id, user_id, f"faceit:{faceit_id}")
+        "INSERT INTO members (guild_id, user_id, faceit_id) VALUES (?, ?, ?) "
+        "ON CONFLICT(guild_id, user_id) DO UPDATE SET faceit_id=excluded.faceit_id",
+        (guild_id, user_id, faceit_id)
     )
     conn.commit()
 
 def get_faceit_id(guild_id: int, user_id: int) -> str | None:
     """Возвращает Faceit ID участника."""
     row = cursor.execute(
-        "SELECT username FROM members WHERE guild_id = ? AND user_id = ? AND username LIKE 'faceit:%'",
+        "SELECT faceit_id FROM members WHERE guild_id = ? AND user_id = ?",
         (guild_id, user_id)
     ).fetchone()
-    return row[0].replace("faceit:", "") if row else None
+    return row[0] if row else None
 
 def get_all_cs_links(guild_id: int) -> list:
     """Возвращает [(user_id, steam_id, faceit_id)] для всех привязанных CS игроков."""
     rows = cursor.execute(
-        "SELECT s.user_id, s.steam_id, m.username "
+        "SELECT s.user_id, s.steam_id, m.faceit_id "
         "FROM steam_links s "
-        "LEFT JOIN members m ON s.guild_id = m.guild_id AND s.user_id = m.user_id AND m.username LIKE 'faceit:%' "
+        "LEFT JOIN members m ON s.guild_id = m.guild_id AND s.user_id = m.user_id "
         "WHERE s.guild_id = ?",
         (guild_id,)
     ).fetchall()
-    return [(r[0], r[1], r[2].replace("faceit:", "") if r[2] else None) for r in rows]
+    return rows
 
 # --- Dota player tracking ---
 

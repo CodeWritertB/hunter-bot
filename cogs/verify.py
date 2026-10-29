@@ -36,6 +36,11 @@ class NicknameModal(disnake.ui.Modal):
             return await inter.response.send_message("❌ Верификация не настроена.", ephemeral=True)
 
         _, guest_role_id, member_role_id = settings
+        if guest_role_id == member_role_id:
+            return await inter.response.send_message(
+                "❌ В настройках верификации должны быть разные роли гостя и участника.",
+                ephemeral=True
+            )
 
         # Проверяем — уже верифицирован (есть роль участника или нет роли гостя)
         guest_role = inter.guild.get_role(guest_role_id)
@@ -57,7 +62,10 @@ class NicknameModal(disnake.ui.Modal):
             name = _build_nick(name, streak, cold)
             await inter.author.edit(nick=name)
         except disnake.Forbidden:
-            pass
+            return await inter.response.send_message(
+                "❌ Не удалось изменить ник. Проверьте право управления никами и порядок ролей бота.",
+                ephemeral=True
+            )
 
         if guest_role:
             await inter.author.remove_roles(guest_role)
@@ -105,6 +113,11 @@ class Verify(commands.Cog):
         guest_role: disnake.Role,
         member_role: disnake.Role
     ):
+        if guest_role.id == member_role.id:
+            return await inter.response.send_message(
+                "❌ Роли гостя и участника должны различаться.",
+                ephemeral=True
+            )
         set_verify_settings(inter.guild.id, channel.id, guest_role.id, member_role.id)
         log.info(f"[{inter.guild.name}] Верификация настроена: канал #{channel.name}")
 

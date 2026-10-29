@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import re
 import aiohttp
 import disnake
@@ -10,10 +11,10 @@ from db.database import get_music_channel, set_music_channel as db_set_music_cha
 
 log = logging.getLogger("cogs.music")
 
-LAVALINK_HOST = "lavalink.jirayu.net"
-LAVALINK_PORT = 13592
-LAVALINK_PASSWORD = "youshallnotpass"
-LAVALINK_SECURE = False
+LAVALINK_HOST = os.getenv("LAVALINK_HOST", "").strip()
+LAVALINK_PORT = int(os.getenv("LAVALINK_PORT", "2333"))
+LAVALINK_PASSWORD = os.getenv("LAVALINK_PASSWORD", "")
+LAVALINK_SECURE = os.getenv("LAVALINK_SECURE", "false").strip().lower() in {"1", "true", "yes"}
 
 LAVALINK_BASE = f"{'https' if LAVALINK_SECURE else 'http'}://{LAVALINK_HOST}:{LAVALINK_PORT}"
 LAVALINK_HEADERS = {"Authorization": LAVALINK_PASSWORD, "Content-Type": "application/json"}
@@ -66,7 +67,7 @@ async def search_track(query: str) -> dict | list[dict] | None:
                 tracks.append(result)
         return tracks if tracks else None
 
-    if not query.startswith("http"):
+    if not query.lower().startswith("http"):
         query = f"ytsearch:{query}"
 
     data = await lavalink_request("GET", "/v4/loadtracks", params={"identifier": query})
@@ -130,21 +131,6 @@ async def lavalink_request(method: str, path: str, **kwargs):
                     return None
             log.warning(f"Lavalink {r.status}: {await r.text()}")
             return None
-
-
-async def search_track(query: str) -> dict | None:
-    if not query.startswith("http"):
-        query = f"ytsearch:{query}"
-    data = await lavalink_request("GET", "/v4/loadtracks", params={"identifier": query})
-    if not data:
-        return None
-    lt = data.get("loadType")
-    if lt == "track":
-        return data["data"]
-    elif lt == "search":
-        tracks = data.get("data", [])
-        return tracks[0] if tracks else None
-    return None
 
 
 def build_embed(player: MusicPlayer) -> disnake.Embed:
@@ -295,6 +281,9 @@ class Music(commands.Cog):
     async def connect_lavalink(self):
         global music_cog_session
         await self.bot.wait_until_ready()
+        if not LAVALINK_HOST or not LAVALINK_PASSWORD:
+            log.warning("Музыка отключена: задайте LAVALINK_HOST и LAVALINK_PASSWORD в .env")
+            return
         ws_url = f"{'wss' if LAVALINK_SECURE else 'ws'}://{LAVALINK_HOST}:{LAVALINK_PORT}/v4/websocket"
         headers = {
             "Authorization": LAVALINK_PASSWORD,

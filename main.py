@@ -52,6 +52,9 @@ _root.addHandler(_err_handler)
 
 # Загружаем токен из .env файла
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+token = os.getenv("BOT_TOKEN")
+if not token:
+    raise RuntimeError("BOT_TOKEN не задан. Добавьте токен Discord-бота в .env.")
 
 # Создаём бота только с поддержкой slash-команд
 bot = commands.InteractionBot(intents=disnake.Intents.all(), enable_debug_events=True)
@@ -70,7 +73,6 @@ bot.load_extension("cogs.tracker")      # Сбор статистики учас
 bot.load_extension("cogs.backup")       # Автобэкап базы данных
 bot.load_extension("cogs.dota")         # Dota 2 / Steam статистика
 bot.load_extension("cogs.cs2")          # CS2 / Faceit статистика
-bot.load_extension("cogs.gameserver")   # CS2 сервер мониторинг
 bot.load_extension("cogs.admin_panel")  # Панель управления сервером
 bot.load_extension("cogs.reload")       # Перезагрузка модулей
 bot.load_extension("cogs.autoupdate")   # Автообновление с GitHub
@@ -130,4 +132,4 @@ async def on_ready():
     if _status_task is None or _status_task.done():
         _status_task = bot.loop.create_task(status_loop())
 
-bot.run(os.getenv("BOT_TOKEN"))
+bot.run(token)

@@ -40,8 +40,6 @@ def build_status_embed(guild: disnake.Guild) -> disnake.Embed:
     embed.add_field(name="🔧 Админ-лог", value=ch(get_admin_log_channel(guild_id)), inline=True)
     embed.add_field(name="🎮 Dota 2", value=ch(_get_server(guild_id, "dota_channel_id")), inline=True)
     embed.add_field(name="🔫 CS2 матчи", value=ch(_get_server(guild_id, "cs_channel_id")), inline=True)
-    embed.add_field(name="🖥 CS2 сервер", value=ch(_get_server(guild_id, "cs_server_channel_id")), inline=True)
-    embed.add_field(name="🎵 Канал музыки", value=ch(_get_server(guild_id, "music_channel_id")), inline=True)
 
     if verify:
         _, guest_id, member_id = verify
@@ -109,8 +107,10 @@ class VerifyModal(disnake.ui.Modal):
         guest = inter.guild.get_role(guest_id)
         member_role = inter.guild.get_role(member_id)
 
-        if not channel or not guest or not member_role:
+        if not isinstance(channel, disnake.TextChannel) or not guest or not member_role:
             return await inter.response.send_message("❌ Канал или роль не найдены.", ephemeral=True)
+        if guest.id == member_role.id:
+            return await inter.response.send_message("❌ Роли гостя и участника должны различаться.", ephemeral=True)
 
         set_verify_settings(inter.guild.id, ch_id, guest_id, member_id)
 
@@ -142,7 +142,6 @@ class AdminPanelView(disnake.ui.View):
             ("admin_log",   "🔧 Админ-лог",      get_admin_log_channel(guild_id)),
             ("dota",        "🎮 Dota 2",          _get_server(guild_id, "dota_channel_id")),
             ("cs",          "🔫 CS2 матчи",       _get_server(guild_id, "cs_channel_id")),
-            ("cs_server",   "🖥 CS2 сервер",      _get_server(guild_id, "cs_server_channel_id")),
         ]
         for setting, label, current in settings:
             style = disnake.ButtonStyle.success if current else disnake.ButtonStyle.secondary
