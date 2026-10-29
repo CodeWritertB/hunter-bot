@@ -1,3 +1,5 @@
+import io
+import json
 import disnake
 import logging
 from disnake.ext import commands
@@ -12,6 +14,78 @@ from db.database import (
 )
 
 log = logging.getLogger("cogs.admin_panel")
+
+
+def permission_names(permissions: disnake.Permissions) -> list[str]:
+    return [name for name, enabled in permissions if enabled]
+
+
+def build_server_audit(guild: disnake.Guild) -> dict:
+    roles = [
+        {
+            "id": role.id,
+            "name": role.name,
+            "position": role.position,
+            "color": f"#{role.color.value:06X}",
+            "hoist": role.hoist,
+            "mentionable": role.mentionable,
+            "managed": role.managed,
+            "permissions": permission_names(role.permissions),
+        }
+        for role in sorted(guild.roles, key=lambda item: item.position, reverse=True)
+    ]
+
+    channels = []
+    for channel in sorted(guild.channels, key=lambda item: (item.position, item.id)):
+        overwrites = []
+        for target, overwrite in channel.overwrites.items():
+            allow, deny = overwrite.pair()
+            target_type = "role" if isinstance(target, disnake.Role) else "member"
+            overwrites.append({
+                "target_type": target_type,
+                "target_id": target.id,
+                "target_name": str(target),
+                "allow": permission_names(allow),
+                "deny": permission_names(deny),
+            })
+
+        entry = {
+            "id": channel.id,
+            "name": channel.name,
+            "type": str(channel.type),
+            "position": channel.position,
+            "category_id": getattr(channel, "category_id", None),
+            "overwrites": overwrites,
+        }
+        if isinstance(channel, disnake.TextChannel):
+            entry.update({
+                "topic": channel.topic,
+                "nsfw": channel.nsfw,
+                "slowmode_seconds": channel.slowmode_delay,
+            })
+        elif isinstance(channel, disnake.VoiceChannel):
+            entry.update({
+                "user_limit": channel.user_limit,
+                "bitrate": channel.bitrate,
+                "rtc_region": channel.rtc_region,
+            })
+        channels.append(entry)
+
+    return {
+        "guild": {
+            "id": guild.id,
+            "name": guild.name,
+            "owner_id": guild.owner_id,
+            "verification_level": str(guild.verification_level),
+            "explicit_content_filter": str(guild.explicit_content_filter),
+            "default_role_id": guild.default_role.id,
+            "system_channel_id": guild.system_channel.id if guild.system_channel else None,
+            "rules_channel_id": getattr(guild, "rules_channel_id", None),
+            "public_updates_channel_id": getattr(guild, "public_updates_channel_id", None),
+        },
+        "roles": roles,
+        "channels": channels,
+    }
 
 
 def build_status_embed(guild: disnake.Guild) -> disnake.Embed:
@@ -171,6 +245,21 @@ class AdminPanelView(disnake.ui.View):
 class AdminPanelCog(commands.Cog):
     def __init__(self, bot: commands.InteractionBot):
         self.bot = bot
+
+    @commands.slash_command(
+        description="Выгрузить роли, каналы и права сервера для аудита",
+        default_member_permissions=disnake.Permissions(administrator=True)
+    )
+    async def server_audit(self, inter: disnake.ApplicationCommandInteraction):
+        audit = build_server_audit(inter.guild)
+        payload = json.dumps(audit, ensure_ascii=False, indent=2).encode("utf-8")
+        filename = f"server-audit-{inter.guild.id}.json"
+        file = disnake.File(io.BytesIO(payload), filename=filename)
+        await inter.response.send_message(
+            "Аудит сервера готов. Файл содержит список каналов, ролей и настроенных прав; ничего на сервере не изменено.",
+            file=file,
+            ephemeral=True,
+        )
 
     @commands.slash_command(
         description="Открыть панель управления сервером",
