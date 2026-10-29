@@ -93,6 +93,7 @@ python main.py
 | Команда | Назначение |
 |---|---|
 | `/admin` | Панель конфигурации сервера |
+| `/server_audit` | Выгрузить каналы, роли и права сервера для аудита |
 | `/set_info`, `/set_verify`, `/set_new_channel`, `/set_music_channel` | Настройка приветствий, верификации, лобби и музыки |
 | `/set_log`, `/set_admin_log` | Каналы журналов событий |
 | `/set_dota_channel`, `/set_cs_channel` | Каналы игровых уведомлений |

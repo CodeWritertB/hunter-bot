@@ -29,11 +29,11 @@ PRESET_NAMES = [
 ]
 
 
-def save_vc_settings(vc: disnake.VoiceChannel, owner_id: int):
+def save_vc_settings(vc: disnake.VoiceChannel, owner_id: int, name: str | None = None):
     ow = vc.overwrites_for(vc.guild.default_role)
     save_room_settings(
         owner_id=owner_id,
-        name=vc.name,
+        name=name if name is not None else vc.name,
         user_limit=vc.user_limit,
         locked=ow.connect is False,
         hidden=ow.view_channel is False
@@ -75,7 +75,7 @@ class NameSelect(disnake.ui.StringSelect):
     async def callback(self, inter: disnake.MessageInteraction):
         name = self.values[0]
         await self.vc.edit(name=name)
-        save_vc_settings(self.vc, self.owner.id)
+        save_vc_settings(self.vc, self.owner.id, name=name)
         log.info(f"[{inter.guild.name}] Комната переименована в '{name}' ({inter.author})")
         if msg := panel_messages.get(self.vc.id):
             await msg.edit(embed=build_panel_embed(self.vc, self.owner))
@@ -103,7 +103,7 @@ class RenameModal(disnake.ui.Modal):
     async def callback(self, inter: disnake.ModalInteraction):
         name = inter.text_values["name"]
         await self.vc.edit(name=name)
-        save_vc_settings(self.vc, self.owner.id)
+        save_vc_settings(self.vc, self.owner.id, name=name)
         log.info(f"[{inter.guild.name}] Комната переименована в '{name}' ({inter.author})")
         if msg := panel_messages.get(self.vc.id):
             await msg.edit(embed=build_panel_embed(self.vc, self.owner))
