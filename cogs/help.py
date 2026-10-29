@@ -34,8 +34,6 @@ class Help(commands.Cog):
         if inter.author.guild_permissions.administrator:
             embed2 = disnake.Embed(title="🔧 Админ команды", color=disnake.Color.red())
             embed2.add_field(name="/admin", value="Панель настроек сервера.", inline=False)
-            embed2.add_field(name="/server_audit", value="Выгрузить роли, каналы и права для аудита.", inline=False)
-            embed2.add_field(name="/hunt_setup", value="Предпросмотр и оформление сервера в стиле Hunt: Showdown.", inline=False)
             embed2.add_field(name="/reload [модуль]", value="Перезагрузить расширение бота.", inline=False)
             embed2.add_field(name="/set_info [канал]", value="Канал оповещений о входе/выходе.", inline=False)
             embed2.add_field(name="/set_verify [канал] [гость] [участник]", value="Настроить верификацию.", inline=False)
