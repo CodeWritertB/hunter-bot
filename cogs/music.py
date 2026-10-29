@@ -16,6 +16,22 @@ MAX_PLAYLIST_TRACKS = 50
 IDLE_TIMEOUT = 300
 
 
+class YouTubeBotChallengeError(Exception):
+    pass
+
+
+class YtDlpLogger:
+    def debug(self, message: str):
+        if not message.startswith("[debug]"):
+            log.debug("yt-dlp: %s", message)
+
+    def warning(self, message: str):
+        log.warning("yt-dlp: %s", message)
+
+    def error(self, message: str):
+        log.error("yt-dlp: %s", message)
+
+
 def is_spotify_url(query: str) -> bool:
     return bool(re.search(r"(?:open\.spotify\.com|spotify:)", query, flags=re.IGNORECASE))
 
@@ -33,11 +49,20 @@ def _extract_info(query: str, *, flat: bool = False) -> dict | None:
         "noplaylist": not flat,
         "playlistend": MAX_PLAYLIST_TRACKS,
         "extract_flat": "in_playlist" if flat else False,
+        "logger": YtDlpLogger(),
     }
     if not flat:
         options["format"] = "bestaudio/best"
-    with YoutubeDL(options) as ydl:
-        return ydl.extract_info(query, download=False)
+    try:
+        with YoutubeDL(options) as ydl:
+            return ydl.extract_info(query, download=False)
+    except DownloadError as error:
+        message = str(error).casefold()
+        if "sign in to confirm" in message and "not a bot" in message:
+            raise YouTubeBotChallengeError(
+                "YouTube is rejecting automated requests from this hosting provider."
+            ) from error
+        raise
 
 
 def _track_from_info(info: dict) -> dict | None:
@@ -67,6 +92,8 @@ def _track_from_info(info: dict) -> dict | None:
 async def extract_spotify_items(query: str) -> list[str] | None:
     try:
         info = await asyncio.to_thread(_extract_info, query, flat=True)
+    except YouTubeBotChallengeError:
+        raise
     except DownloadError:
         log.warning("Не удалось получить метаданные Spotify-ссылки")
         return None
@@ -102,6 +129,8 @@ async def search_track(query: str) -> dict | list[dict] | None:
     identifier = query if query.startswith(("http://", "https://")) else f"ytsearch1:{query}"
     try:
         info = await asyncio.to_thread(_extract_info, identifier, flat=True)
+    except YouTubeBotChallengeError:
+        raise
     except DownloadError:
         log.warning("yt-dlp не смог найти трек по запросу")
         return None
@@ -150,6 +179,7 @@ class MusicPlayer:
         self.started_at = 0.0
         self.idle_since: float | None = None
         self.generation = 0
+        self.playback_error: str | None = None
         self.lock = asyncio.Lock()
 
 
@@ -293,6 +323,7 @@ class Music(commands.Cog):
 
     async def start_next_track(self, guild_id: int) -> bool:
         player = get_player(guild_id)
+        player.playback_error = None
         async with player.lock:
             guild = self.bot.get_guild(guild_id)
             voice = guild.voice_client if guild else None
@@ -328,6 +359,14 @@ class Music(commands.Cog):
                     log.info("[guild=%s] Запущен трек: %s", guild_id, track["info"]["title"])
                     await self.update_player_message(player, active=True)
                     return True
+                except YouTubeBotChallengeError:
+                    player.playback_error = (
+                        "YouTube отклонил запрос с IP хостинга. Попробуй ссылку с другого поддерживаемого аудиосервиса."
+                    )
+                    log.warning(
+                        "[guild=%s] YouTube отклонил запросы с IP хостинга",
+                        guild_id,
+                    )
                 except (DownloadError, OSError, disnake.DiscordException):
                     log.exception(
                         "[guild=%s] Не удалось запустить трек: %s",
@@ -410,7 +449,16 @@ class Music(commands.Cog):
             return await inter.response.send_message("❌ Зайди в голосовой канал.", ephemeral=True)
 
         await inter.response.defer()
-        result = await search_track(query)
+        try:
+            result = await search_track(query)
+        except YouTubeBotChallengeError:
+            return await inter.edit_original_response(
+                content=(
+                    "❌ YouTube отклонил запросы с IP хостинга как автоматические. "
+                    "Это ограничение YouTube, а не ошибка Discord-бота. Попробуй ссылку "
+                    "из другого источника, например SoundCloud, или обратись к хостингу."
+                )
+            )
         tracks = result if isinstance(result, list) else [result] if result else []
         if not tracks:
             return await inter.edit_original_response(content="❌ Не удалось найти трек. Проверь ссылку или запрос.")
@@ -427,6 +475,21 @@ class Music(commands.Cog):
                     await voice.move_to(inter.author.voice.channel)
             else:
                 voice = await inter.author.voice.channel.connect()
+        except disnake.errors.ConnectionClosed as error:
+            log.exception(
+                "[%s] Голосовой WebSocket закрыт: code=%s",
+                inter.guild.name,
+                error.code,
+            )
+            if error.code == 4017:
+                message = (
+                    "❌ Discord требует DAVE/E2EE для голосового подключения. "
+                    "Обнови зависимости бота командой `pip install -r requirements.txt` "
+                    "и перезапусти его; нужна версия `disnake[voice]` с поддержкой DAVE."
+                )
+            else:
+                message = f"❌ Discord закрыл голосовое подключение (код {error.code}). Попробуй позже."
+            return await inter.edit_original_response(content=message)
         except (disnake.Forbidden, disnake.ClientException, disnake.HTTPException):
             log.exception("[%s] Не удалось подключиться к голосовому каналу", inter.guild.name)
             return await inter.edit_original_response(
@@ -452,7 +515,9 @@ class Music(commands.Cog):
             if not await self.start_next_track(inter.guild.id):
                 return await inter.edit_original_response(
                     content=(
-                        "❌ Не удалось запустить аудио. Проверьте, что FFmpeg установлен на хосте "
+                        f"❌ {player.playback_error}"
+                        if player.playback_error
+                        else "❌ Не удалось запустить аудио. Проверьте, что FFmpeg установлен на хосте "
                         f"(исполняемый файл: `{FFMPEG_EXECUTABLE}`) и ссылка доступна."
                     ),
                     embed=None,

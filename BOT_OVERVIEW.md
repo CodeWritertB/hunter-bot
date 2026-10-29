@@ -31,7 +31,7 @@ Hunter Bot — бот на `disnake`, который работает на Disco
 
 ### `requirements.txt`
 
-Фиксирует версии `disnake`, `python-dotenv`, `yt-dlp`, `PyNaCl` и `aiohttp`. Это Discord API-клиент, загрузчик метаданных видео/плейлистов и HTTP-клиент.
+Фиксирует версии `disnake[voice]`, `python-dotenv`, `yt-dlp` и `aiohttp`. Voice extra устанавливает PyNaCl и DAVE-библиотеку, необходимые для голосового подключения, включая Discord E2EE.
 
 ### `db/database.py`
 
