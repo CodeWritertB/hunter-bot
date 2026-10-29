@@ -1,5 +1,6 @@
 import sqlite3
 import os
+from datetime import datetime, timezone
 
 # Подключение к БД с поддержкой многопоточности
 conn = sqlite3.connect(os.path.join(os.path.dirname(__file__), "..", "bot.db"), check_same_thread=False)
@@ -63,6 +64,12 @@ cursor.executescript("""
         streak    INTEGER DEFAULT 0,
         last_date TEXT,
         PRIMARY KEY (guild_id, user_id)
+    );
+    CREATE TABLE IF NOT EXISTS completed_migrations (
+        migration_key TEXT NOT NULL,
+        scope_id      INTEGER NOT NULL,
+        completed_at  TEXT NOT NULL,
+        PRIMARY KEY (migration_key, scope_id)
     );
 
     -- Статистика участников
@@ -393,6 +400,38 @@ def get_streak(guild_id: int, user_id: int):
         (guild_id, user_id)
     ).fetchone()
     return row if row else (0, 0, None)
+
+
+def has_completed_migration(migration_key: str, scope_id: int) -> bool:
+    """Returns whether a one-time migration has completed for the given scope."""
+    row = cursor.execute(
+        "SELECT 1 FROM completed_migrations WHERE migration_key = ? AND scope_id = ?",
+        (migration_key, scope_id),
+    ).fetchone()
+    return row is not None
+
+
+def reset_guild_streaks_once(migration_key: str, guild_id: int, user_ids: list[int]) -> bool:
+    """Resets all streaks to zero once per guild and records completion atomically."""
+    with conn:
+        completed = conn.execute(
+            "SELECT 1 FROM completed_migrations WHERE migration_key = ? AND scope_id = ?",
+            (migration_key, guild_id),
+        ).fetchone()
+        if completed:
+            return False
+
+        conn.execute("DELETE FROM voice_streaks WHERE guild_id = ?", (guild_id,))
+        conn.executemany(
+            "INSERT INTO voice_streaks (guild_id, user_id, streak, cold_streak, last_date) "
+            "VALUES (?, ?, 0, 0, NULL)",
+            ((guild_id, user_id) for user_id in user_ids),
+        )
+        conn.execute(
+            "INSERT INTO completed_migrations (migration_key, scope_id, completed_at) VALUES (?, ?, ?)",
+            (migration_key, guild_id, datetime.now(timezone.utc).isoformat()),
+        )
+    return True
 
 
 # --- Статистика участников ---

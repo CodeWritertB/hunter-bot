@@ -4,11 +4,18 @@ import asyncio
 import re
 from datetime import datetime, timezone, timedelta
 from disnake.ext import commands
-from db.database import update_streak, get_all_streaks, get_streak
+from db.database import (
+    update_streak,
+    get_all_streaks,
+    get_streak,
+    has_completed_migration,
+    reset_guild_streaks_once,
+)
 
 log = logging.getLogger("cogs.streaks")
 
 MSK = timezone(timedelta(hours=3))
+LEGACY_STREAK_RESET_MIGRATION = "reset_legacy_voice_streaks_v1"
 
 # guild_id -> set of user_ids кто зашёл в войс сегодня
 voice_today: dict[int, set[int]] = {}
@@ -63,20 +70,52 @@ class Streaks(commands.Cog):
 
             voice_today[guild.id] = set()
 
-    async def update_nick(self, member: disnake.Member, streak: int, cold_streak: int = 0):
+    async def update_nick(self, member: disnake.Member, streak: int, cold_streak: int = 0) -> bool:
         try:
             current = member.display_name
             new_nick = build_nick(current, streak, cold_streak)
             if new_nick != current:
                 await member.edit(nick=new_nick if new_nick != member.name else None)
+            return True
         except disnake.Forbidden:
-            pass
+            return False
 
     @commands.Cog.listener()
     async def on_ready(self):
-        """При старте восстанавливаем voice_today из БД."""
+        """Однократно очищает старые стрики, затем восстанавливает активность за сегодня."""
         today = datetime.now(MSK).date().isoformat()
         for guild in self.bot.guilds:
+            if not has_completed_migration(LEGACY_STREAK_RESET_MIGRATION, guild.id):
+                try:
+                    members = [member async for member in guild.fetch_members(limit=None)]
+                except (disnake.ClientException, disnake.HTTPException):
+                    log.exception(
+                        "[%s] Не удалось получить всех участников; старые стрики не сброшены",
+                        guild.name,
+                    )
+                    raise
+                reset = reset_guild_streaks_once(
+                    LEGACY_STREAK_RESET_MIGRATION,
+                    guild.id,
+                    [member.id for member in members],
+                )
+                if reset:
+                    uncleaned_nicks = 0
+                    for member in members:
+                        if not member.bot and not await self.update_nick(member, 0, 0):
+                            uncleaned_nicks += 1
+                    log.info(
+                        "[%s] Одноразово сброшены старые стрики участников: %s",
+                        guild.name,
+                        len(members),
+                    )
+                    if uncleaned_nicks:
+                        log.warning(
+                            "[%s] Не удалось убрать старый суффикс стрика у участников: %s",
+                            guild.name,
+                            uncleaned_nicks,
+                        )
+
             rows = get_all_streaks(guild.id)
             voice_today[guild.id] = {
                 row[0] for row in rows if row[-1] == today
