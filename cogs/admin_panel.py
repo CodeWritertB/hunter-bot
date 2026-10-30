@@ -1,5 +1,7 @@
 import disnake
 import logging
+import io
+from datetime import datetime, timezone
 from disnake.ext import commands
 from db.database import (
     _get_server, _upsert_server,
@@ -160,6 +162,67 @@ class AdminPanelView(disnake.ui.View):
 class AdminPanelCog(commands.Cog):
     def __init__(self, bot: commands.InteractionBot):
         self.bot = bot
+
+    @commands.slash_command(description="Выгрузить настройки сервера в Markdown для аудита",
+                            default_member_permissions=disnake.Permissions(administrator=True),
+                            dm_permission=False)
+    async def server_audit(self, inter: disnake.ApplicationCommandInteraction):
+        if not inter.guild or not inter.author.guild_permissions.administrator:
+            return await inter.response.send_message("Нужны права администратора.", ephemeral=True)
+        await inter.response.defer(ephemeral=True)
+        guild = inter.guild
+        def clean(value):
+            return str(value).replace("\r", " ").replace("\n", " ").replace("`", "'")
+        def perms(value):
+            return ", ".join(name for name, enabled in value if enabled) or "нет"
+        lines = [f"# Аудит сервера: {clean(guild.name)}",
+                 f"Дата UTC: {datetime.now(timezone.utc).isoformat()}",
+                 f"ID: {guild.id}; участников: {guild.member_count}",
+                 f"Уровень верификации: {guild.verification_level}",
+                 f"Фильтр контента: {guild.explicit_content_filter}",
+                 f"Уведомления: {guild.default_notifications}; MFA: {guild.mfa_level}",
+                 f"Функции: {', '.join(guild.features)}",
+                 f"AFK: {guild.afk_channel}; таймаут: {guild.afk_timeout}",
+                 f"Системный канал: {guild.system_channel}; правила: {guild.rules_channel}",
+                 f"Канал обновлений: {guild.public_updates_channel}",
+                 f"Системные уведомления: {guild.system_channel_flags}",
+                 "", "## Настройки бота"]
+        from db.database import get_all_temp_channels
+        for field in build_status_embed(guild).fields:
+            lines.append(f"- {field.name}: {clean(field.value)}")
+        lines += ["", "## Временные комнаты (ID канала → ID владельца)"]
+        lines.extend(f"- {channel_id} → {owner_id}" for channel_id, owner_id in get_all_temp_channels(guild.id))
+        lines += ["", "## Роли (сверху вниз)"]
+        for role in reversed(guild.roles):
+            lines += [f"### {clean(role.name)} ({role.id})",
+                      f"Позиция: {role.position}; цвет: {role.color}; отдельно: {role.hoist}; упоминание: {role.mentionable}; управляемая: {role.managed}",
+                      f"Права: {perms(role.permissions)}"]
+        lines += ["", "## Каналы и категории"]
+        for channel in sorted(guild.channels, key=lambda c: (c.category.position if c.category else c.position, c.position, c.id)):
+            lines += [f"### {clean(channel.name)} ({channel.id})",
+                      f"Тип: {channel.type}; позиция: {channel.position}; категория: {channel.category_id}",
+                      f"Синхронизация прав: {getattr(channel, 'permissions_synced', None)}"]
+            for attr in ("topic", "nsfw", "slowmode_delay", "bitrate", "user_limit", "rtc_region", "default_auto_archive_duration"):
+                if hasattr(channel, attr):
+                    lines.append(f"{attr}: {clean(getattr(channel, attr))}")
+            for target, overwrite in channel.overwrites.items():
+                allow, deny = overwrite.pair()
+                lines.append(f"- Overwrite {type(target).__name__} {clean(target.name)} ({target.id}): разрешено [{perms(allow)}]; запрещено [{perms(deny)}]")
+            lines.append(f"Эффективные права @everyone: {perms(channel.permissions_for(guild.default_role))}")
+            if guild.me:
+                lines.append(f"Эффективные права бота: {perms(channel.permissions_for(guild.me))}")
+        lines += ["", "## Права ботов (кэш Discord)"]
+        for member in guild.members:
+            if member.bot:
+                lines.append(f"- {clean(member.display_name)} ({member.id}): роли {', '.join(str(r.id) for r in member.roles)}; права {perms(member.guild_permissions)}")
+        lines += ["", "## Ограничения отчёта",
+                  "Снимок настроек, доступных боту. Не включает сообщения, содержимое личных каналов, токены, приглашения, AutoMod и настройки интеграций.",
+                  "Список ботов зависит от кэша. Права участников зависят от сочетания ролей и персональных запретов; administrator обходит запреты каналов."]
+        payload = "\n\n".join(lines).encode("utf-8")
+        if len(payload) > guild.filesize_limit:
+            return await inter.edit_original_response(content="Отчёт превышает лимит файла сервера.")
+        await inter.edit_original_response(content="Отчёт готов. Перед передачей проверь названия и описания приватных каналов.",
+                                           file=disnake.File(io.BytesIO(payload), filename=f"server-audit-{guild.id}.md"))
 
     @commands.slash_command(
         description="Открыть панель управления сервером",
