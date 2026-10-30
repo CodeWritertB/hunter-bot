@@ -534,10 +534,7 @@ class Music(commands.Cog):
                     await self.update_player_message(player, active=True)
                     return True
                 except DownloadError as error:
-                    player.playback_error = (
-                        "Не удалось воспроизвести трек: источник недоступен или защищён DRM. "
-                        "Попробуй другой результат или ссылку."
-                    )
+                    player.playback_error = str(error)[:800]
                     log.warning(
                         "[guild=%s] Пропущен недоступный трек %s: %s",
                         guild_id,

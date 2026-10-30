@@ -1,11 +1,15 @@
 import asyncio
 import json
+import logging
+import re
 import os
 import shutil
 import sys
 import time
 from pathlib import Path
 from db.storage import DATA_DIR
+
+log = logging.getLogger("cogs.music_repair")
 
 PACKAGES = DATA_DIR / "music-runtime"
 lock = asyncio.Lock()
@@ -179,15 +183,37 @@ def download_audio(uri):
     cookies = cookie_path()
     if cookies:
         args += ["--cookies", cookies]
+    ffmpeg = ffmpeg_path()
+    if ffmpeg:
+        args += ["--ffmpeg-location", ffmpeg]
     args += ["--", uri]
     try:
         result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", env=env, timeout=180)
         if result.returncode:
-            raise RuntimeError("YouTube не разрешил скачать аудио. Проверь доступность трека и авторизацию.")
+            detail = result.stderr[-8000:]
+            safe = re.sub(r"https?://[^\s]+", "[URL]", detail)
+            safe = "\n".join(line for line in safe.splitlines() if not re.search(r"cookie|authorization|SAPISID|SID=", line, re.I))
+            log.error("yt-dlp download failed: exit=%s; %s", result.returncode, safe[-4000:])
+            lower = detail.lower()
+            if "403" in lower:
+                reason = "YouTube вернул HTTP 403 при скачивании аудио."
+            elif "sign in" in lower or "not a bot" in lower:
+                reason = "YouTube требует авторизацию или подтверждение, что запрос выполняет человек."
+            elif "requested format" in lower:
+                reason = "YouTube не предоставил доступный аудиоформат."
+            elif "ffmpeg" in lower:
+                reason = "yt-dlp не смог обработать аудио через FFmpeg."
+            else:
+                reason = f"Не удалось скачать аудио (код yt-dlp: {result.returncode})."
+            raise RuntimeError(reason + " Подробности в журнале: yt-dlp download failed.")
         files = [f for f in Path(work.name).glob("audio.*") if f.is_file() and f.suffix not in {".part", ".ytdl", ".temp"}]
         if len(files) != 1 or files[0].stat().st_size == 0:
+            log.error("yt-dlp download failed: no complete audio; files=%s", [(item.suffix, item.stat().st_size) for item in Path(work.name).iterdir() if item.is_file()])
             raise RuntimeError("Аудио не загружено: файл отсутствует, пуст или превышает лимит 150 МБ.")
         return str(files[0]), work
+    except subprocess.TimeoutExpired as error:
+        work.cleanup()
+        raise RuntimeError("Скачивание превысило 180 секунд. Попробуй более короткий трек.") from error
     except Exception:
         work.cleanup()
         raise
