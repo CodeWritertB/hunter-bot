@@ -218,6 +218,12 @@ class MusicView(disnake.ui.View):
             return await inter.edit_original_response(content="Сначала останови воспроизведение: обновление компонентов недоступно во время загрузки или проигрывания.")
         try:
             result = await repair()
+            if result.startswith("Компоненты YouTube обновлены"):
+                player = get_player(self.guild_id)
+                player.playback_error = None
+                cog = inter.bot.get_cog("Music")
+                if cog:
+                    await cog.update_player_message(player, active=False)
         except Exception:
             log.exception("Ошибка восстановления YouTube")
             result = "Не удалось обновить компоненты. Подробности в журнале бота."
@@ -394,9 +400,10 @@ class Music(commands.Cog):
                     audio_url = await asyncio.to_thread(_resolve_audio_url, uri)
                     if player.generation != generation_before_load:
                         return False
+                    from cogs.music_repair import ffmpeg_path
                     source = disnake.FFmpegOpusAudio(
                         audio_url,
-                        executable=FFMPEG_EXECUTABLE,
+                        executable=ffmpeg_path() or FFMPEG_EXECUTABLE,
                         bitrate=128,
                         before_options="-nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
                         options="-vn",
@@ -426,7 +433,7 @@ class Music(commands.Cog):
                     )
                 except YouTubeBotChallengeError:
                     player.playback_error = (
-                        "YouTube отклонил запрос с IP хостинга. Нужны актуальный yt-dlp, JavaScript runtime и при необходимости cookies YouTube."
+                        "YouTube требует подтверждение входа или отклонил запрос. Обновление компонентов не снимает эту блокировку. Нужна авторизованная сессия YouTube или решение ограничения на стороне хостинга."
                     )
                     log.warning(
                         "[guild=%s] YouTube отклонил запросы с IP хостинга",

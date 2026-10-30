@@ -20,6 +20,26 @@ def runtime_path():
         return next((str(p) for p in PACKAGES.rglob("node.exe" if os.name == "nt" else "node") if p.is_file() and (os.name == "nt" or os.access(p, os.X_OK))), None)
 
 
+def ffmpeg_path():
+    configured = shutil.which(os.getenv("FFMPEG_PATH", "ffmpeg"))
+    if configured:
+        return configured
+    binaries = PACKAGES / "imageio_ffmpeg" / "binaries"
+    return next((str(p) for p in binaries.glob("ffmpeg*") if p.is_file() and (p.suffix == ".exe" if os.name == "nt" else os.access(p, os.X_OK))), None)
+
+
+def check_ffmpeg():
+    import subprocess
+    path = ffmpeg_path()
+    if not path:
+        return False
+    try:
+        result = subprocess.run([path, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=10)
+        return result.returncode == 0 and "libopus" in result.stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 async def repair():
     global last_attempt
     if lock.locked():
@@ -30,7 +50,7 @@ async def repair():
         last_attempt = time.monotonic()
         PACKAGES.mkdir(parents=True, exist_ok=True)
         process = await asyncio.create_subprocess_exec(sys.executable, "-m", "pip", "install", "--upgrade", "--target", str(PACKAGES),
-                "--no-cache-dir", "--disable-pip-version-check", "yt-dlp[default]", "nodejs-wheel", stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                "--no-cache-dir", "--disable-pip-version-check", "yt-dlp[default]", "nodejs-wheel", "imageio-ffmpeg", stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
         try:
             await asyncio.wait_for(process.wait(), 240)
         except asyncio.TimeoutError:
@@ -40,10 +60,10 @@ async def repair():
         if process.returncode:
             return "Установка не удалась. Проверь доступ к PyPI, свободное место и поддержку платформы."
         node = runtime_path()
-        ffmpeg = shutil.which(os.getenv("FFMPEG_PATH", "ffmpeg"))
+        ffmpeg = await asyncio.to_thread(check_ffmpeg)
         return ("Компоненты YouTube обновлены в постоянном хранилище.\n"
                 + ("✅ JavaScript runtime найден." if node else "❌ JavaScript runtime не найден.")
-                + ("\n✅ FFmpeg найден." if ffmpeg else "\n❌ FFmpeg отсутствует: установи через настройки хостинга.")
+                + ("\n✅ FFmpeg запускается, кодек Opus доступен." if ffmpeg else "\n❌ FFmpeg не запускается или не поддерживает Opus: проверь ограничения хостинга.")
                 + "\nПопробуй добавить трек заново. Если YouTube требует вход или блокирует IP, обновление не заменяет авторизацию.")
 
 
