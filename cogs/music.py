@@ -422,7 +422,7 @@ class Music(commands.Cog):
         except (disnake.NotFound, disnake.Forbidden, disnake.HTTPException):
             log.exception("Не удалось обновить сообщение музыкального плеера")
 
-    def schedule_track_end(self, guild_id, generation, error, stderr):
+    def schedule_track_end(self, guild_id, generation, error, stderr, process=None):
         try:
             stderr.seek(0, 2)
             size = stderr.tell()
@@ -433,26 +433,33 @@ class Music(commands.Cog):
         # Do not log signed media URLs or authentication headers.
         safe = re.sub(r"https?://[^\s]+", "[URL]", detail)
         safe = "\n".join(line for line in safe.splitlines() if not re.search(r"cookie|authorization", line, re.I))
+        if error:
+            safe_error = re.sub(r"https?://[^\s]+", "[URL]", str(error))
+            log.error("[guild=%s] Voice callback: %s: %s", guild_id, type(error).__name__, safe_error[:1000])
+        exit_code = process.poll() if process is not None else None
+        log.info("[guild=%s] Audio ended: ffmpeg_exit=%s; callback_error=%s; stderr_bytes=%s", guild_id, exit_code, type(error).__name__ if error else "none", size)
         if safe.strip():
             log.warning("[guild=%s] FFmpeg: %s", guild_id, safe[-3000:])
         self.bot.loop.call_soon_threadsafe(
-            lambda: self.bot.loop.create_task(self.on_track_end(guild_id, generation, error, detail))
+            lambda: self.bot.loop.create_task(self.on_track_end(guild_id, generation, error, detail, exit_code))
         )
 
-    async def on_track_end(self, guild_id, generation, error=None, detail=""):
+    async def on_track_end(self, guild_id, generation, error=None, detail="", exit_code=None):
         player = players.get(guild_id)
         if not player or player.generation != generation:
             return
         elapsed = asyncio.get_running_loop().time() - player.started_at
         duration = (player.current or {}).get("info", {}).get("length", 0) / 1000
-        failed = not player.expected_stop and (error is not None or (elapsed < 5 and (duration == 0 or duration > elapsed + 5)))
+        failed = not player.expected_stop and (error is not None or exit_code not in (None, 0) or (elapsed < 5 and (duration == 0 or duration > elapsed + 5)))
         player.expected_stop = False
         player.current = None
         player.position = 0
         player.paused = False
         if failed and not player.queue:
             reason = "YouTube отклонил сам аудиопоток (HTTP 403)." if "403" in detail else "Аудиопоток завершился сразу после запуска."
-            player.playback_error = reason + " Данные трека получены, но звук не запустился. Диагностика FFmpeg записана в журнал бота."
+            if error:
+                reason = f"Ошибка передачи звука в Discord ({type(error).__name__})."
+            player.playback_error = reason + f" Код FFmpeg: {exit_code if exit_code is not None else 'не завершён'}. Подробности — в журнале бота: Audio ended / Voice callback / FFmpeg."
             log.error("[guild=%s] Раннее завершение аудио: %.2f сек", guild_id, elapsed)
             guild = self.bot.get_guild(guild_id)
             voice = guild.voice_client if guild else None
@@ -509,7 +516,7 @@ class Music(commands.Cog):
                     player.playback_error = None
                     voice.play(
                         source,
-                        after=lambda error, g=generation, diagnostic=stderr: self.schedule_track_end(guild_id, g, error, diagnostic),
+                        after=lambda error, g=generation, diagnostic=stderr, proc=source._process: self.schedule_track_end(guild_id, g, error, diagnostic, proc),
                     )
                     log.info("[guild=%s] Запущен трек: %s", guild_id, track["info"]["title"])
                     await self.update_player_message(player, active=True)
@@ -697,7 +704,11 @@ class Music(commands.Cog):
             inter.author,
             added_count,
         )
-        await inter.edit_original_response(content=f"✅ Добавлено треков: {added_count}. Плеер находится в назначенном музыкальном канале.")
+        await asyncio.sleep(0.5)
+        if player.playback_error and not player.current:
+            await inter.edit_original_response(content=f"❌ {player.playback_error}")
+        else:
+            await inter.edit_original_response(content=f"✅ Добавлено треков: {added_count}. Плеер находится в назначенном музыкальном канале.")
 
 
 def setup(bot: commands.InteractionBot):
