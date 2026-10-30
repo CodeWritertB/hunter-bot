@@ -629,7 +629,6 @@ class Dota(commands.Cog):
         _upsert_server(inter.guild.id, dota_channel_id=channel.id)
         await inter.response.send_message(f"✅ Канал Dota 2 уведомлений: {channel.mention}", ephemeral=True)
 
-    @commands.slash_command(description="Привязать Steam аккаунт")
     async def link_steam(self, inter: disnake.ApplicationCommandInteraction, steam: str):
         if not STEAM_API_KEY:
             return await inter.response.send_message("❌ Steam API ключ не настроен.", ephemeral=True)
@@ -659,13 +658,12 @@ class Dota(commands.Cog):
         unlink_steam(inter.guild.id, inter.author.id)
         await inter.response.send_message("✅ Steam аккаунт отвязан.", ephemeral=True)
 
-    @commands.slash_command(description="Статистика Dota 2")
     async def dota(self, inter: disnake.ApplicationCommandInteraction, member: disnake.Member = None):
         member = member or inter.author
         steam64 = get_steam_id(inter.guild.id, member.id)
         if not steam64:
             return await inter.response.send_message(
-                f"❌ {'У тебя' if member == inter.author else f'У {member.mention}'} не привязан Steam. Используй `/link_steam`.",
+                f"❌ {'У тебя' if member == inter.author else f'У {member.mention}'} не привязан Steam. Нажми «Привязать аккаунт» на закреплённой панели Dota 2.",
                 ephemeral=True
             )
         await inter.response.defer()
@@ -707,7 +705,6 @@ class Dota(commands.Cog):
         embed.set_footer(text=f"Steam64: {steam64} | Данные: OpenDota")
         await inter.edit_original_response(embed=embed)
 
-    @commands.slash_command(description="Статистика матчей гильдии за неделю")
     async def dota_week(self, inter: disnake.ApplicationCommandInteraction):
         rows = get_guild_week_stats(inter.guild.id)
         if not rows:
@@ -730,7 +727,6 @@ class Dota(commands.Cog):
         embed.set_footer(text=f"Неделя с {current_week()}")
         await inter.response.send_message(embed=embed)
 
-    @commands.slash_command(description="Последние матчи в Dota 2")
     async def dota_matches(self, inter: disnake.ApplicationCommandInteraction, member: disnake.Member = None):
         member = member or inter.author
         steam64 = get_steam_id(inter.guild.id, member.id)

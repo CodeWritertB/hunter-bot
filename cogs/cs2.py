@@ -361,7 +361,6 @@ class CS2(commands.Cog):
         _upsert_server(inter.guild.id, cs_channel_id=channel.id)
         await inter.response.send_message(f"✅ Канал CS2 уведомлений: {channel.mention}", ephemeral=True)
 
-    @commands.slash_command(description="Привязать Faceit аккаунт для CS2")
     async def link_cs(self, inter: disnake.ApplicationCommandInteraction, faceit_nickname: str):
         """Привязывает Faceit аккаунт по нику."""
         if not FACEIT_API_KEY:
@@ -397,7 +396,6 @@ class CS2(commands.Cog):
         embed.set_thumbnail(url=player.get("avatar", ""))
         await inter.edit_original_response(embed=embed)
 
-    @commands.slash_command(description="Статистика CS2 / Faceit")
     async def cs(self, inter: disnake.ApplicationCommandInteraction, member: disnake.Member = None):
         member = member or inter.author
         faceit_id = get_faceit_id(inter.guild.id, member.id)
@@ -405,7 +403,7 @@ class CS2(commands.Cog):
 
         if not faceit_id and not steam64:
             return await inter.response.send_message(
-                "❌ Аккаунт не привязан. Используй `/link_cs`.", ephemeral=True
+                "❌ Аккаунт не привязан. Нажми «Привязать аккаунт» на закреплённой панели CS2.", ephemeral=True
             )
 
         await inter.response.defer()

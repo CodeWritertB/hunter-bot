@@ -66,6 +66,22 @@ async def ensure_panel(guild, channel_id, kind, title, description):
         conn.commit()
     if not message.pinned:
         await message.pin(reason="Постоянная инструкция по привязке аккаунта")
+    # Delete only obsolete copies of this bot's profile instructions.
+    if kind in {"dota", "cs2"}:
+        cleanup_key = f"cleanup_old_game_instructions_v1_{kind}"
+        done = conn.execute("SELECT 1 FROM completed_migrations WHERE migration_key=? AND scope_id=?", (cleanup_key, guild.id)).fetchone()
+        if not done:
+            async for old in channel.history(limit=None):
+                if old.id == message.id or old.author.id != guild.me.id:
+                    continue
+                obsolete = any(e.title == title for e in old.embeds)
+                text = old.content or ""
+                obsolete = obsolete or (text.startswith(("Привяжи Steam командой", "Привяжи аккаунт командой")) and "В этом канале публикует бот" in text)
+                if obsolete:
+                    await old.delete()
+            conn.execute("INSERT OR IGNORE INTO completed_migrations VALUES (?, ?, datetime('now'))", (cleanup_key, guild.id))
+            conn.commit()
+
 
 
 _setup_lock = asyncio.Lock()

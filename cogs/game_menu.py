@@ -36,7 +36,8 @@ async def invoke(inter, game, action, **kwargs):
         return await inter.response.send_message("Модуль временно недоступен. Попробуй позже.", ephemeral=True)
     try:
         command = getattr(type(cog), action)
-        await command.callback(cog, PrivateInteraction(inter), **kwargs)
+        handler = getattr(command, "callback", command)
+        await handler(cog, PrivateInteraction(inter), **kwargs)
     except Exception:
         log.exception("Ошибка игровой панели: %s/%s", game, action)
         if inter.response.is_done():
