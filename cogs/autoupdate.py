@@ -2,6 +2,7 @@ import asyncio
 import logging
 import subprocess
 import os
+import shutil
 from disnake.ext import commands
 
 log = logging.getLogger("cogs.autoupdate")
@@ -39,6 +40,16 @@ class AutoUpdate(commands.Cog):
     async def update_loop(self):
         """Каждые 10 минут проверяет обновления на GitHub."""
         await self.bot.wait_until_ready()
+        if os.getenv("BOT_AUTOUPDATE", "1").lower() in {"0", "false", "no", "off"}:
+            log.info("Встроенное автообновление отключено настройкой BOT_AUTOUPDATE.")
+            return
+        if shutil.which("git") is None:
+            log.warning("Встроенное автообновление отключено: Git отсутствует в контейнере. Обновляйте бота через панель хостинга.")
+            return
+        code, _ = await asyncio.to_thread(run_git, ["rev-parse", "--is-inside-work-tree"])
+        if code != 0:
+            log.warning("Встроенное автообновление отключено: каталог бота не является Git-репозиторием. Используйте панель хостинга.")
+            return
         while not self.bot.is_closed():
             await asyncio.sleep(CHECK_INTERVAL)
             try:
