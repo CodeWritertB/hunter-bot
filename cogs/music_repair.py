@@ -24,7 +24,7 @@ def ffmpeg_path():
     configured = shutil.which(os.getenv("FFMPEG_PATH", "ffmpeg"))
     if configured:
         return configured
-    binaries = PACKAGES / "imageio_ffmpeg" / "binaries"
+    binaries = DATA_DIR / "ffmpeg-compat-060" / "imageio_ffmpeg" / "binaries"
     return next((str(p) for p in binaries.glob("ffmpeg*") if p.is_file() and (p.suffix == ".exe" if os.name == "nt" else os.access(p, os.X_OK))), None)
 
 
@@ -34,8 +34,8 @@ def check_ffmpeg():
     if not path:
         return False
     try:
-        result = subprocess.run([path, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=10)
-        return result.returncode == 0 and "libopus" in result.stdout
+        result = subprocess.run([path, "-nostdin", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", "0.2", "-c:a", "libopus", "-f", "opus", "pipe:1"], capture_output=True, timeout=15)
+        return result.returncode == 0 and result.stdout.startswith(b"OggS")
     except (OSError, subprocess.TimeoutExpired):
         return False
 
@@ -50,7 +50,7 @@ async def repair():
         last_attempt = time.monotonic()
         PACKAGES.mkdir(parents=True, exist_ok=True)
         process = await asyncio.create_subprocess_exec(sys.executable, "-m", "pip", "install", "--upgrade", "--target", str(PACKAGES),
-                "--no-cache-dir", "--disable-pip-version-check", "yt-dlp[default]", "nodejs-wheel", "imageio-ffmpeg", stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                "--no-cache-dir", "--disable-pip-version-check", "yt-dlp[default]", "nodejs-wheel", stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
         try:
             await asyncio.wait_for(process.wait(), 240)
         except asyncio.TimeoutError:
@@ -59,11 +59,22 @@ async def repair():
             return "Обновление превысило время ожидания. Проверь доступ хостинга к PyPI."
         if process.returncode:
             return "Установка не удалась. Проверь доступ к PyPI, свободное место и поддержку платформы."
+        # Separate destination avoids selecting a stale binary from an earlier installation.
+        compat = DATA_DIR / "ffmpeg-compat-060"
+        process = await asyncio.create_subprocess_exec(sys.executable, "-m", "pip", "install", "--upgrade", "--only-binary=:all:", "--no-deps", "--target", str(compat), "--no-cache-dir", "imageio-ffmpeg==0.6.0", stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        try:
+            await asyncio.wait_for(process.wait(), 180)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            return "Не удалось установить другую сборку FFmpeg: время ожидания истекло."
+        if process.returncode:
+            return "Не удалось установить совместимую сборку FFmpeg для платформы хостинга."
         node = runtime_path()
         ffmpeg = await asyncio.to_thread(check_ffmpeg)
         return ("Компоненты YouTube обновлены в постоянном хранилище.\n"
                 + ("✅ JavaScript runtime найден." if node else "❌ JavaScript runtime не найден.")
-                + ("\n✅ FFmpeg запускается, кодек Opus доступен." if ffmpeg else "\n❌ FFmpeg не запускается или не поддерживает Opus: проверь ограничения хостинга.")
+                + ("\n✅ FFmpeg прошёл реальное кодирование звука в Opus." if ffmpeg else "\n❌ FFmpeg не прошёл тест кодирования: проблема сборки или среды хостинга.")
                 + "\nПопробуй добавить трек заново. Если YouTube требует вход или блокирует IP, обновление не заменяет авторизацию.")
 
 

@@ -457,6 +457,8 @@ class Music(commands.Cog):
         player.paused = False
         if failed and not player.queue:
             reason = "YouTube отклонил сам аудиопоток (HTTP 403)." if "403" in detail else "Аудиопоток завершился сразу после запуска."
+            if exit_code == -11:
+                reason = "FFmpeg аварийно завершился (SIGSEGV). Нажми «Восстановить YouTube» для замены сборки аудио."
             if error:
                 reason = f"Ошибка передачи звука в Discord ({type(error).__name__})."
             player.playback_error = reason + f" Код FFmpeg: {exit_code if exit_code is not None else 'не завершён'}. Подробности — в журнале бота: Audio ended / Voice callback / FFmpeg."
