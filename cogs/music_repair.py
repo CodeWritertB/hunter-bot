@@ -118,3 +118,34 @@ def configure_cookies(raw):
     (DATA_DIR / "youtube-cookie-path.txt").write_text(str(path), encoding="utf-8")
     os.environ["YOUTUBE_COOKIES_FILE"] = str(path)
     return "Файл cookies подключён. Повтори добавление трека; авторизация не гарантирует снятие ограничений YouTube."
+
+
+def save_cookie_text(raw):
+    import tempfile
+    text = raw.strip()
+    if not text.startswith(("# Netscape HTTP Cookie File", "# HTTP Cookie File")):
+        raise ValueError("Требуется Netscape-формат")
+    valid = []
+    for line in text.splitlines():
+        if not line.strip() or (line.startswith("#") and not line.startswith("#HttpOnly_")):
+            continue
+        fields = line.split("\t")
+        if len(fields) != 7:
+            raise ValueError("Неверный формат строки cookies")
+        domain = fields[0].removeprefix("#HttpOnly_").lstrip(".").lower()
+        if domain == "youtube.com" or domain.endswith(".youtube.com"):
+            valid.append(line)
+    if not valid:
+        raise ValueError("Нет cookies YouTube")
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    path = DATA_DIR / "youtube-cookies.txt"
+    fd, temporary = tempfile.mkstemp(prefix="cookies-", dir=DATA_DIR)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as output:
+            output.write("# Netscape HTTP Cookie File\n" + "\n".join(valid) + "\n")
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    (DATA_DIR / "youtube-cookie-path.txt").write_text(str(path), encoding="utf-8")
+    os.environ["YOUTUBE_COOKIES_FILE"] = str(path)
+    return "Cookies YouTube сохранены. Попробуй добавить трек. Это не гарантирует снятие ограничений IP."

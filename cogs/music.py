@@ -188,7 +188,7 @@ def build_embed(player: MusicPlayer) -> disnake.Embed:
     else:
         embed.add_field(name="Очередь", value="Пусто", inline=False)
     if player.playback_error:
-        embed.add_field(name="Как восстановить доступ", value="Обнови компоненты кнопкой восстановления. Если YouTube требует вход: открой YouTube в браузере. Файл cookies своей сессии нужно отдельно разместить в /app/shared и подключить кнопкой «Настроить YouTube». Бот не получает cookies из браузера автоматически. Не передавай пароль и коды входа.", inline=False)
+        embed.add_field(name="Как восстановить доступ", value="Обнови компоненты кнопкой восстановления. Если YouTube требует вход: открой YouTube в браузере. Экспортируй cookies своей сессии YouTube в Netscape-формате и вставь через «Настроить YouTube» (до 4000 символов). Это секрет сессии: используй отдельный аккаунт. Бот не получает cookies из браузера автоматически. Не передавай пароль и коды входа.", inline=False)
         embed.add_field(name="Ошибка воспроизведения", value=player.playback_error[:1024], inline=False)
     return embed
 
@@ -196,19 +196,19 @@ def build_embed(player: MusicPlayer) -> disnake.Embed:
 class YouTubeSettingsModal(disnake.ui.Modal):
     def __init__(self):
         super().__init__(title="Настройка YouTube", components=[
-            disnake.ui.TextInput(label="Путь к cookies на хосте (необязательно)", custom_id="cookies_path",
-                                 placeholder="/app/shared/hunter-bot/youtube-cookies.txt", required=False, max_length=300)])
+            disnake.ui.TextInput(label="Cookies YouTube в Netscape-формате", custom_id="cookies_text",
+                                 style=disnake.TextInputStyle.paragraph, placeholder="# Netscape HTTP Cookie File\nВставь содержимое экспорта cookies, не пароль или код входа", required=True, max_length=4000)])
 
     async def callback(self, inter):
         if not inter.author.guild_permissions.administrator:
             return await inter.response.send_message("Нужны права администратора.", ephemeral=True)
-        from cogs.music_repair import configure_cookies
-        raw = inter.text_values["cookies_path"].strip()
+        from cogs.music_repair import save_cookie_text
+        raw = inter.text_values["cookies_text"].strip()
         try:
-            result = configure_cookies(raw)
+            result = save_cookie_text(raw)
         except (ValueError, OSError, UnicodeError) as error:
             log.warning("Не удалось подключить файл cookies: %s", type(error).__name__)
-            return await inter.response.send_message("Файл не подключён. Проверь путь внутри /app/shared, доступность и Netscape-формат. Не вводи пароль, коды или содержимое cookies.", ephemeral=True)
+            return await inter.response.send_message("Cookies не сохранены. Нужен Netscape-экспорт с табуляцией и доменом youtube.com. Пароли, коды входа и JSON не подходят.", ephemeral=True)
         await inter.response.send_message(result, ephemeral=True)
 
 
@@ -241,7 +241,7 @@ class MusicView(disnake.ui.View):
         super().__init__(timeout=None)
         self.guild_id = guild_id
         self._update_pause_button()
-        self.add_item(disnake.ui.Button(label="Открыть YouTube", url="https://www.youtube.com/", emoji="🌐", row=2))
+        self.add_item(disnake.ui.Button(label="YouTube — войти в аккаунт", url="https://www.youtube.com/", emoji="🌐", row=2))
 
     async def interaction_check(self, inter):
         if getattr(inter.component, "custom_id", None) == "music_add":
