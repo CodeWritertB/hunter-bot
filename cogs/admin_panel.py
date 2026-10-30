@@ -216,6 +216,15 @@ class AdminPanelCog(commands.Cog):
                 except Exception:
                     log.exception("Не удалось восстановить игровую панель")
 
+    @commands.slash_command(description="Проверить подключение и YouTube-поиск Lavalink",
+                            default_member_permissions=disnake.Permissions(administrator=True))
+    async def lavalink_test(self, inter):
+        if not inter.guild or not inter.author.guild_permissions.administrator:
+            return await inter.response.send_message("Нужны права администратора.", ephemeral=True)
+        await inter.response.defer(ephemeral=True)
+        from cogs.lavalink_probe import probe
+        await inter.edit_original_response(content=await probe())
+
     @commands.slash_command(description="Выгрузить настройки сервера в Markdown для аудита",
                             default_member_permissions=disnake.Permissions(administrator=True),
                             dm_permission=False)
