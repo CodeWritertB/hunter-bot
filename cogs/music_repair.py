@@ -89,3 +89,32 @@ def extract(query, flat, limit, cookies):
     if result.returncode:
         raise RuntimeError(result.stderr[-3000:])
     return json.loads(result.stdout)
+
+
+def cookie_path():
+    configured = os.getenv("YOUTUBE_COOKIES_FILE", "").strip()
+    if configured:
+        return configured
+    setting = DATA_DIR / "youtube-cookie-path.txt"
+    return setting.read_text(encoding="utf-8").strip() if setting.is_file() else None
+
+
+def configure_cookies(raw):
+    raw = raw.strip()
+    if not raw:
+        return "Путь не изменён."
+    path = Path(raw).expanduser().resolve()
+    allowed = Path("/app/shared").resolve() if os.name != "nt" else DATA_DIR.resolve()
+    if not path.is_relative_to(allowed):
+        raise ValueError("Файл должен находиться в /app/shared (локально — в каталоге данных бота).")
+    if not path.is_file() or path.stat().st_size > 2 * 1024 * 1024:
+        raise ValueError("Файл не найден или превышает 2 МБ.")
+    text = path.read_text(encoding="utf-8-sig")
+    if not text.startswith(("# Netscape HTTP Cookie File", "# HTTP Cookie File")):
+        raise ValueError("Нужен файл cookies в Netscape-формате, а не пароль или код входа.")
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if os.name != "nt":
+        path.chmod(0o600)
+    (DATA_DIR / "youtube-cookie-path.txt").write_text(str(path), encoding="utf-8")
+    os.environ["YOUTUBE_COOKIES_FILE"] = str(path)
+    return "Файл cookies подключён. Повтори добавление трека; авторизация не гарантирует снятие ограничений YouTube."

@@ -44,10 +44,10 @@ def format_search_query(info: dict) -> str:
 
 
 def _extract_info(query: str, *, flat: bool = False) -> dict | None:
-    from cogs.music_repair import PACKAGES, extract
+    from cogs.music_repair import PACKAGES, extract, cookie_path
     if (PACKAGES / "yt_dlp" / "__main__.py").is_file():
         try:
-            return extract(query, flat, MAX_PLAYLIST_TRACKS, os.getenv("YOUTUBE_COOKIES_FILE"))
+            return extract(query, flat, MAX_PLAYLIST_TRACKS, cookie_path())
         except RuntimeError as error:
             if "sign in to confirm" in str(error).lower():
                 raise YouTubeBotChallengeError("YouTube требует авторизацию") from error
@@ -63,7 +63,7 @@ def _extract_info(query: str, *, flat: bool = False) -> dict | None:
     if not flat:
         options["format"] = "bestaudio/best"
     options.update(socket_timeout=20, retries=2, js_runtimes={"node": {}})
-    cookies = os.getenv("YOUTUBE_COOKIES_FILE")
+    cookies = cookie_path()
     if cookies:
         options["cookiefile"] = cookies
     try:
@@ -188,8 +188,28 @@ def build_embed(player: MusicPlayer) -> disnake.Embed:
     else:
         embed.add_field(name="Очередь", value="Пусто", inline=False)
     if player.playback_error:
+        embed.add_field(name="Как восстановить доступ", value="Обнови компоненты кнопкой восстановления. Если YouTube требует вход: открой YouTube в браузере. Файл cookies своей сессии нужно отдельно разместить в /app/shared и подключить кнопкой «Настроить YouTube». Бот не получает cookies из браузера автоматически. Не передавай пароль и коды входа.", inline=False)
         embed.add_field(name="Ошибка воспроизведения", value=player.playback_error[:1024], inline=False)
     return embed
+
+
+class YouTubeSettingsModal(disnake.ui.Modal):
+    def __init__(self):
+        super().__init__(title="Настройка YouTube", components=[
+            disnake.ui.TextInput(label="Путь к cookies на хосте (необязательно)", custom_id="cookies_path",
+                                 placeholder="/app/shared/hunter-bot/youtube-cookies.txt", required=False, max_length=300)])
+
+    async def callback(self, inter):
+        if not inter.author.guild_permissions.administrator:
+            return await inter.response.send_message("Нужны права администратора.", ephemeral=True)
+        from cogs.music_repair import configure_cookies
+        raw = inter.text_values["cookies_path"].strip()
+        try:
+            result = configure_cookies(raw)
+        except (ValueError, OSError, UnicodeError) as error:
+            log.warning("Не удалось подключить файл cookies: %s", type(error).__name__)
+            return await inter.response.send_message("Файл не подключён. Проверь путь внутри /app/shared, доступность и Netscape-формат. Не вводи пароль, коды или содержимое cookies.", ephemeral=True)
+        await inter.response.send_message(result, ephemeral=True)
 
 
 class AddTrackModal(disnake.ui.Modal):
@@ -221,6 +241,7 @@ class MusicView(disnake.ui.View):
         super().__init__(timeout=None)
         self.guild_id = guild_id
         self._update_pause_button()
+        self.add_item(disnake.ui.Button(label="Открыть YouTube", url="https://www.youtube.com/", emoji="🌐", row=2))
 
     async def interaction_check(self, inter):
         if getattr(inter.component, "custom_id", None) == "music_add":
@@ -228,7 +249,7 @@ class MusicView(disnake.ui.View):
                 await inter.response.send_message("Сначала зайди в голосовой канал.", ephemeral=True)
                 return False
             return True
-        if getattr(inter.component, "custom_id", None) == "music_repair":
+        if getattr(inter.component, "custom_id", None) in {"music_repair", "music_youtube_settings"}:
             if inter.author.guild_permissions.administrator:
                 return True
             await inter.response.send_message("Восстановление запускает администратор сервера.", ephemeral=True)
@@ -261,6 +282,10 @@ class MusicView(disnake.ui.View):
     @disnake.ui.button(label="Добавить трек", emoji="➕", style=disnake.ButtonStyle.primary, custom_id="music_add", row=0)
     async def add_track(self, button, inter):
         await inter.response.send_modal(AddTrackModal())
+
+    @disnake.ui.button(label="Настроить YouTube", emoji="🔑", style=disnake.ButtonStyle.secondary, custom_id="music_youtube_settings", row=2)
+    async def youtube_settings(self, button, inter):
+        await inter.response.send_modal(YouTubeSettingsModal())
 
     def _update_pause_button(self):
         player = players.get(self.guild_id)
