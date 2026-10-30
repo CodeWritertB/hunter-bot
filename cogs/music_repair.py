@@ -160,3 +160,34 @@ def save_cookie_text(raw):
     (DATA_DIR / "youtube-cookie-path.txt").write_text(str(path), encoding="utf-8")
     os.environ["YOUTUBE_COOKIES_FILE"] = str(path)
     return "Cookies YouTube сохранены. Попробуй добавить трек. Это не гарантирует снятие ограничений IP."
+
+
+def download_audio(uri):
+    """Download with yt-dlp; FFmpeg never opens the remote HTTPS stream."""
+    import subprocess
+    import tempfile
+    work = tempfile.TemporaryDirectory(prefix="hunter-audio-")
+    env = os.environ.copy()
+    if (PACKAGES / "yt_dlp" / "__main__.py").is_file():
+        env["PYTHONPATH"] = str(PACKAGES) + os.pathsep + env.get("PYTHONPATH", "")
+    args = [sys.executable, "-m", "yt_dlp", "--no-playlist", "--no-progress", "--quiet", "--no-warnings",
+            "--socket-timeout", "20", "--retries", "2", "--fragment-retries", "2", "--max-filesize", "150M",
+            "--concurrent-fragments", "1", "-f", "bestaudio/best", "-o", str(Path(work.name) / "audio.%(ext)s")]
+    node = runtime_path()
+    if node:
+        args += ["--js-runtimes", "node:" + node]
+    cookies = cookie_path()
+    if cookies:
+        args += ["--cookies", cookies]
+    args += ["--", uri]
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", env=env, timeout=180)
+        if result.returncode:
+            raise RuntimeError("YouTube не разрешил скачать аудио. Проверь доступность трека и авторизацию.")
+        files = [f for f in Path(work.name).glob("audio.*") if f.is_file() and f.suffix not in {".part", ".ytdl", ".temp"}]
+        if len(files) != 1 or files[0].stat().st_size == 0:
+            raise RuntimeError("Аудио не загружено: файл отсутствует, пуст или превышает лимит 150 МБ.")
+        return str(files[0]), work
+    except Exception:
+        work.cleanup()
+        raise

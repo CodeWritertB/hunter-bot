@@ -422,7 +422,7 @@ class Music(commands.Cog):
         except (disnake.NotFound, disnake.Forbidden, disnake.HTTPException):
             log.exception("Не удалось обновить сообщение музыкального плеера")
 
-    def schedule_track_end(self, guild_id, generation, error, stderr, process=None):
+    def schedule_track_end(self, guild_id, generation, error, stderr, process=None, local_audio=None):
         try:
             stderr.seek(0, 2)
             size = stderr.tell()
@@ -437,6 +437,11 @@ class Music(commands.Cog):
             safe_error = re.sub(r"https?://[^\s]+", "[URL]", str(error))
             log.error("[guild=%s] Voice callback: %s: %s", guild_id, type(error).__name__, safe_error[:1000])
         exit_code = process.poll() if process is not None else None
+        if local_audio is not None:
+            try:
+                local_audio.cleanup()
+            except OSError:
+                log.warning("Не удалось удалить временное аудио; файл будет очищен позже")
         log.info("[guild=%s] Audio ended: ffmpeg_exit=%s; callback_error=%s; stderr_bytes=%s", guild_id, exit_code, type(error).__name__ if error else "none", size)
         if safe.strip():
             log.warning("[guild=%s] FFmpeg: %s", guild_id, safe[-3000:])
@@ -458,7 +463,7 @@ class Music(commands.Cog):
         if failed and not player.queue:
             reason = "YouTube отклонил сам аудиопоток (HTTP 403)." if "403" in detail else "Аудиопоток завершился сразу после запуска."
             if exit_code == -11:
-                reason = "FFmpeg аварийно завершился (SIGSEGV). Нажми «Восстановить YouTube» для замены сборки аудио."
+                reason = "FFmpeg аварийно завершился (SIGSEGV). Локальное декодирование не удалось; повторное обновление компонентов не требуется, нужна диагностика среды."
             if error:
                 reason = f"Ошибка передачи звука в Discord ({type(error).__name__})."
             player.playback_error = reason + f" Код FFmpeg: {exit_code if exit_code is not None else 'не завершён'}. Подробности — в журнале бота: Audio ended / Voice callback / FFmpeg."
@@ -490,23 +495,27 @@ class Music(commands.Cog):
                 player.current = track
                 player.position = 0
                 player.paused = False
+                local_audio = None
+                stderr = None
+                source = None
+                playback_started = False
                 try:
                     uri = track["info"]["uri"]
                     generation_before_load = player.generation
-                    audio = await asyncio.to_thread(_resolve_audio_url, uri)
+                    from cogs.music_repair import download_audio, ffmpeg_path
+                    try:
+                        audio_path, local_audio = await asyncio.to_thread(download_audio, uri)
+                    except RuntimeError as error:
+                        raise DownloadError(str(error)) from error
                     if player.generation != generation_before_load:
+                        local_audio.cleanup()
                         return False
-                    from cogs.music_repair import ffmpeg_path
-                    headers = "".join(f"{name}: {value}\r\n" for name, value in audio["headers"].items()
-                                      if name.lower() in {"user-agent", "referer", "origin"} and "\r" not in value and "\n" not in value)
-                    import shlex
-                    header_options = " -headers " + shlex.quote(headers) if headers else ""
                     stderr = tempfile.TemporaryFile()
                     source = disnake.FFmpegOpusAudio(
-                        audio["url"],
+                        audio_path,
                         executable=ffmpeg_path() or FFMPEG_EXECUTABLE,
                         bitrate=128,
-                        before_options="-nostdin -loglevel warning -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5" + header_options,
+                        before_options="-nostdin -loglevel warning",
                         stderr=stderr,
                         options="-vn",
                     )
@@ -518,8 +527,9 @@ class Music(commands.Cog):
                     player.playback_error = None
                     voice.play(
                         source,
-                        after=lambda error, g=generation, diagnostic=stderr, proc=source._process: self.schedule_track_end(guild_id, g, error, diagnostic, proc),
+                        after=lambda error, g=generation, diagnostic=stderr, proc=source._process, local=local_audio: self.schedule_track_end(guild_id, g, error, diagnostic, proc, local),
                     )
+                    playback_started = True
                     log.info("[guild=%s] Запущен трек: %s", guild_id, track["info"]["title"])
                     await self.update_player_message(player, active=True)
                     return True
@@ -549,6 +559,14 @@ class Music(commands.Cog):
                         guild_id,
                         track.get("info", {}).get("title", "unknown"),
                     )
+                finally:
+                    if not playback_started:
+                        if source is not None:
+                            source.cleanup()
+                        if stderr is not None:
+                            stderr.close()
+                        if local_audio is not None:
+                            local_audio.cleanup()
             player.current = None
             player.position = 0
             player.paused = False
