@@ -196,6 +196,26 @@ class AdminPanelCog(commands.Cog):
     def __init__(self, bot: commands.InteractionBot):
         self.bot = bot
 
+    @commands.Cog.listener()
+    async def on_ready(self):
+        from cogs.server_setup import apply_setup
+        for guild in self.bot.guilds:
+            try:
+                await apply_setup(guild)
+            except Exception:
+                log.exception("Не удалось завершить согласованную настройку сервера")
+
+    @commands.Cog.listener()
+    async def on_raw_message_delete(self, payload):
+        from cogs.server_setup import apply_setup, GUILD_ID
+        if payload.guild_id == GUILD_ID and payload.channel_id in (1487101267624067233, 1487112222571499632):
+            guild = self.bot.get_guild(payload.guild_id)
+            if guild:
+                try:
+                    await apply_setup(guild)
+                except Exception:
+                    log.exception("Не удалось восстановить игровую панель")
+
     @commands.slash_command(description="Выгрузить настройки сервера в Markdown для аудита",
                             default_member_permissions=disnake.Permissions(administrator=True),
                             dm_permission=False)
