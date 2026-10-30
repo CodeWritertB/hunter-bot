@@ -178,7 +178,7 @@ def build_embed(player: MusicPlayer) -> disnake.Embed:
             inline=False,
         )
     else:
-        embed.add_field(name="Не удалось воспроизвести" if player.playback_error else "Готов к воспроизведению", value="Зайди в голосовой канал и используй `/music` с названием или ссылкой YouTube.", inline=False)
+        embed.add_field(name="Не удалось воспроизвести" if player.playback_error else "Готов к воспроизведению", value="Зайди в голосовой канал и нажми «Добавить трек». Введи название песни или ссылку YouTube.", inline=False)
 
     if player.queue:
         lines = [f"{i + 1}. {track.get('info', {}).get('title', '?')}" for i, track in enumerate(player.queue[:5])]
@@ -192,6 +192,30 @@ def build_embed(player: MusicPlayer) -> disnake.Embed:
     return embed
 
 
+class AddTrackModal(disnake.ui.Modal):
+    def __init__(self):
+        super().__init__(title="Добавить музыку", components=[
+            disnake.ui.TextInput(label="Название трека или ссылка YouTube", custom_id="query",
+                                 placeholder="Исполнитель — песня или https://youtu.be/...",
+                                 min_length=1, max_length=500)])
+
+    async def callback(self, inter):
+        cog = inter.bot.get_cog("Music")
+        if not cog:
+            return await inter.response.send_message("Плеер временно недоступен.", ephemeral=True)
+        query = inter.text_values["query"].strip()
+        if not query:
+            return await inter.response.send_message("Введи название или ссылку YouTube.", ephemeral=True)
+        try:
+            await cog.music(inter, query)
+        except Exception:
+            log.exception("Не удалось добавить трек через музыкальную панель")
+            if inter.response.is_done():
+                await inter.followup.send("Не удалось добавить трек. Попробуй позже.", ephemeral=True)
+            else:
+                await inter.response.send_message("Не удалось добавить трек. Попробуй позже.", ephemeral=True)
+
+
 class MusicView(disnake.ui.View):
     def __init__(self, guild_id: int):
         super().__init__(timeout=None)
@@ -199,6 +223,11 @@ class MusicView(disnake.ui.View):
         self._update_pause_button()
 
     async def interaction_check(self, inter):
+        if getattr(inter.component, "custom_id", None) == "music_add":
+            if not inter.guild or not inter.author.voice or not inter.author.voice.channel:
+                await inter.response.send_message("Сначала зайди в голосовой канал.", ephemeral=True)
+                return False
+            return True
         if getattr(inter.component, "custom_id", None) == "music_repair":
             if inter.author.guild_permissions.administrator:
                 return True
@@ -228,6 +257,10 @@ class MusicView(disnake.ui.View):
             log.exception("Ошибка восстановления YouTube")
             result = "Не удалось обновить компоненты. Подробности в журнале бота."
         await inter.edit_original_response(content=result)
+
+    @disnake.ui.button(label="Добавить трек", emoji="➕", style=disnake.ButtonStyle.primary, custom_id="music_add", row=0)
+    async def add_track(self, button, inter):
+        await inter.response.send_modal(AddTrackModal())
 
     def _update_pause_button(self):
         player = players.get(self.guild_id)
@@ -521,7 +554,6 @@ class Music(commands.Cog):
         await self.ensure_panel(inter.guild)
         await inter.response.send_message(f"✅ Музыкальный канал: {channel.mention}", ephemeral=True)
 
-    @commands.slash_command(description="Воспроизвести трек в голосовом канале")
     async def music(self, inter: disnake.ApplicationCommandInteraction, query: str):
         music_channel_id = get_music_channel(inter.guild.id)
         if not music_channel_id:
