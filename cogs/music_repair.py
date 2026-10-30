@@ -195,6 +195,32 @@ def download_audio(uri):
             safe = "\n".join(line for line in safe.splitlines() if not re.search(r"cookie|authorization|SAPISID|SID=", line, re.I))
             log.error("yt-dlp download failed: exit=%s; %s", result.returncode, safe[-4000:])
             lower = detail.lower()
+            flags = {
+                "login_required": "sign in" in lower or "not a bot" in lower,
+                "cookies_rotated": "rotated" in lower,
+                "cookies_invalid": "cookies are no longer valid" in lower or "cookies have expired" in lower,
+                "http_403": "403" in lower,
+                "http_429": "429" in lower,
+                "po_token": "po token" in lower or "po_token" in lower,
+                "js_challenge": "challenge" in lower or "javascript" in lower or "n challenge" in lower,
+                "format_unavailable": "requested format" in lower,
+            }
+            cookie_status = {"configured": bool(cookies), "exists": False, "youtube_entries": 0, "expired_entries": 0}
+            if cookies:
+                try:
+                    path = Path(cookies)
+                    cookie_status["exists"] = path.is_file()
+                    for line in path.read_text(encoding="utf-8-sig").splitlines():
+                        if line.startswith("#") and not line.startswith("#HttpOnly_"):
+                            continue
+                        fields = line.split("\t")
+                        if len(fields) == 7 and fields[0].removeprefix("#HttpOnly_").lstrip(".").endswith("youtube.com"):
+                            cookie_status["youtube_entries"] += 1
+                            if fields[4].isdigit() and 0 < int(fields[4]) < time.time():
+                                cookie_status["expired_entries"] += 1
+                except (OSError, UnicodeError):
+                    cookie_status["unreadable"] = True
+            log.error("YouTube diagnostic: flags=%s; cookie_status=%s; stderr_present=%s", flags, cookie_status, bool(detail.strip()))
             if "403" in lower:
                 reason = "YouTube вернул HTTP 403 при скачивании аудио."
             elif "sign in" in lower or "not a bot" in lower:
