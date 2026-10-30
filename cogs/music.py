@@ -170,7 +170,7 @@ def build_embed(player: MusicPlayer) -> disnake.Embed:
             inline=False,
         )
     else:
-        embed.add_field(name="Готов к воспроизведению", value="Зайди в голосовой канал и используй `/music` с названием или ссылкой YouTube.", inline=False)
+        embed.add_field(name="Не удалось воспроизвести" if player.playback_error else "Готов к воспроизведению", value="Зайди в голосовой канал и используй `/music` с названием или ссылкой YouTube.", inline=False)
 
     if player.queue:
         lines = [f"{i + 1}. {track.get('info', {}).get('title', '?')}" for i, track in enumerate(player.queue[:5])]
@@ -417,6 +417,17 @@ class Music(commands.Cog):
             player.position = 0
             player.paused = False
             player.idle_since = asyncio.get_running_loop().time()
+            if player.playback_error:
+                player.generation += 1
+                player.started_at = 0.0
+                if voice.is_connected():
+                    try:
+                        await voice.disconnect(force=True)
+                    except disnake.DiscordException:
+                        log.exception("[guild=%s] Не удалось отключиться после ошибки аудио", guild_id)
+                if not voice.is_connected():
+                    player.voice_channel_id = None
+                    player.idle_since = None
             await self.update_player_message(player, active=False)
             return False
 
