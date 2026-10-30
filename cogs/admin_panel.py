@@ -208,7 +208,7 @@ class AdminPanelCog(commands.Cog):
     @commands.Cog.listener()
     async def on_raw_message_delete(self, payload):
         from cogs.server_setup import apply_setup, GUILD_ID
-        if payload.guild_id == GUILD_ID and payload.channel_id in (1487101267624067233, 1487112222571499632):
+        if payload.guild_id == GUILD_ID and payload.channel_id in (1487101267624067233, 1487112222571499632, 1486685174459662459):
             guild = self.bot.get_guild(payload.guild_id)
             if guild:
                 try:
