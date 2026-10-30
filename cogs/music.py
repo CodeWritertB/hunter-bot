@@ -44,6 +44,14 @@ def format_search_query(info: dict) -> str:
 
 
 def _extract_info(query: str, *, flat: bool = False) -> dict | None:
+    from cogs.music_repair import PACKAGES, extract
+    if (PACKAGES / "yt_dlp" / "__main__.py").is_file():
+        try:
+            return extract(query, flat, MAX_PLAYLIST_TRACKS, os.getenv("YOUTUBE_COOKIES_FILE"))
+        except RuntimeError as error:
+            if "sign in to confirm" in str(error).lower():
+                raise YouTubeBotChallengeError("YouTube требует авторизацию") from error
+            raise DownloadError("Не удалось загрузить данные YouTube") from error
     options = {
         "quiet": True,
         "no_warnings": True,
@@ -191,11 +199,29 @@ class MusicView(disnake.ui.View):
         self._update_pause_button()
 
     async def interaction_check(self, inter):
+        if getattr(inter.component, "custom_id", None) == "music_repair":
+            if inter.author.guild_permissions.administrator:
+                return True
+            await inter.response.send_message("Восстановление запускает администратор сервера.", ephemeral=True)
+            return False
         voice = inter.guild.voice_client if inter.guild else None
         if not voice or not inter.author.voice or inter.author.voice.channel != voice.channel:
             await inter.response.send_message("Зайди в голосовой канал бота, чтобы управлять музыкой.", ephemeral=True)
             return False
         return True
+
+    @disnake.ui.button(label="Восстановить YouTube", emoji="🔧", style=disnake.ButtonStyle.secondary, custom_id="music_repair", row=1)
+    async def repair_button(self, button, inter):
+        await inter.response.defer(ephemeral=True)
+        from cogs.music_repair import repair
+        if any(p.current for p in players.values()):
+            return await inter.edit_original_response(content="Сначала останови воспроизведение: обновление компонентов недоступно во время загрузки или проигрывания.")
+        try:
+            result = await repair()
+        except Exception:
+            log.exception("Ошибка восстановления YouTube")
+            result = "Не удалось обновить компоненты. Подробности в журнале бота."
+        await inter.edit_original_response(content=result)
 
     def _update_pause_button(self):
         player = players.get(self.guild_id)
@@ -406,7 +432,7 @@ class Music(commands.Cog):
                         "[guild=%s] YouTube отклонил запросы с IP хостинга",
                         guild_id,
                     )
-                except (OSError, disnake.DiscordException):
+                except (OSError, TimeoutError, disnake.DiscordException):
                     player.playback_error = "Не удалось запустить аудио. Проверь FFmpeg и права подключения бота."
                     log.exception(
                         "[guild=%s] Не удалось запустить трек: %s",

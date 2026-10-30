@@ -1,0 +1,71 @@
+import asyncio
+import json
+import os
+import shutil
+import sys
+import time
+from pathlib import Path
+from db.storage import DATA_DIR
+
+PACKAGES = DATA_DIR / "music-runtime"
+lock = asyncio.Lock()
+last_attempt = 0.0
+
+
+def runtime_path():
+    node = shutil.which("node")
+    if node:
+        return node
+    if PACKAGES.exists():
+        return next((str(p) for p in PACKAGES.rglob("node.exe" if os.name == "nt" else "node") if p.is_file() and (os.name == "nt" or os.access(p, os.X_OK))), None)
+
+
+async def repair():
+    global last_attempt
+    if lock.locked():
+        return "Обновление уже выполняется. Подожди завершения."
+    async with lock:
+        if time.monotonic() - last_attempt < 120:
+            return "Повторное обновление доступно через две минуты."
+        last_attempt = time.monotonic()
+        PACKAGES.mkdir(parents=True, exist_ok=True)
+        process = await asyncio.create_subprocess_exec(sys.executable, "-m", "pip", "install", "--upgrade", "--target", str(PACKAGES),
+                "--no-cache-dir", "--disable-pip-version-check", "yt-dlp[default]", "nodejs-wheel", stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        try:
+            await asyncio.wait_for(process.wait(), 240)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            return "Обновление превысило время ожидания. Проверь доступ хостинга к PyPI."
+        if process.returncode:
+            return "Установка не удалась. Проверь доступ к PyPI, свободное место и поддержку платформы."
+        node = runtime_path()
+        ffmpeg = shutil.which(os.getenv("FFMPEG_PATH", "ffmpeg"))
+        return ("Компоненты YouTube обновлены в постоянном хранилище.\n"
+                + ("✅ JavaScript runtime найден." if node else "❌ JavaScript runtime не найден.")
+                + ("\n✅ FFmpeg найден." if ffmpeg else "\n❌ FFmpeg отсутствует: установи через настройки хостинга.")
+                + "\nПопробуй добавить трек заново. Если YouTube требует вход или блокирует IP, обновление не заменяет авторизацию.")
+
+
+def extract(query, flat, limit, cookies):
+    import subprocess
+    node = runtime_path()
+    args = [sys.executable, "-m", "yt_dlp", "--dump-single-json", "--skip-download", "--no-warnings", "--socket-timeout", "20", "--retries", "2", "--playlist-end", str(limit)]
+    if flat:
+        args += ["--flat-playlist"]
+    else:
+        args += ["--no-playlist", "-f", "bestaudio/best"]
+    if node:
+        args += ["--js-runtimes", "node:" + node]
+    if cookies:
+        args += ["--cookies", cookies]
+    args += ["--", query]
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(PACKAGES) + os.pathsep + env.get("PYTHONPATH", "")
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", env=env, timeout=90)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("YouTube request timed out") from error
+    if result.returncode:
+        raise RuntimeError(result.stderr[-3000:])
+    return json.loads(result.stdout)
