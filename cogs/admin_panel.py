@@ -76,41 +76,73 @@ class ChannelSelect(disnake.ui.ChannelSelect):
                 await cog.ensure_panel(inter.guild)
 
 
-class VerifyModal(disnake.ui.Modal):
+class VerifyChannelSelect(disnake.ui.ChannelSelect):
     def __init__(self):
-        super().__init__(title="Настроить верификацию", components=[
-            disnake.ui.TextInput(label="ID канала верификации", custom_id="channel_id"),
-            disnake.ui.TextInput(label="ID роли гостя", custom_id="guest_id"),
-            disnake.ui.TextInput(label="ID роли участника", custom_id="member_id"),
-        ])
+        super().__init__(placeholder="1. Канал верификации", channel_types=[disnake.ChannelType.text], row=0)
 
-    async def callback(self, inter: disnake.ModalInteraction):
-        try:
-            ch_id = int(inter.text_values["channel_id"])
-            guest_id = int(inter.text_values["guest_id"])
-            member_id = int(inter.text_values["member_id"])
-        except ValueError:
-            return await inter.response.send_message("❌ Введи числовые ID.", ephemeral=True)
+    async def callback(self, inter):
+        self.view.channel_id = self.values[0].id
+        await inter.response.edit_message(content=self.view.status(), view=self.view)
 
-        channel = inter.guild.get_channel(ch_id)
-        guest = inter.guild.get_role(guest_id)
-        member_role = inter.guild.get_role(member_id)
 
-        if not isinstance(channel, disnake.TextChannel) or not guest or not member_role:
-            return await inter.response.send_message("❌ Канал или роль не найдены.", ephemeral=True)
-        if guest.id == member_role.id:
-            return await inter.response.send_message("❌ Роли гостя и участника должны различаться.", ephemeral=True)
+class VerifyRoleSelect(disnake.ui.RoleSelect):
+    def __init__(self, setting, label, row):
+        self.setting = setting
+        super().__init__(placeholder=label, row=row)
 
-        set_verify_settings(inter.guild.id, ch_id, guest_id, member_id)
+    async def callback(self, inter):
+        role = inter.guild.get_role(self.values[0].id)
+        if not role or role.is_default() or role.managed or role >= inter.guild.me.top_role:
+            return await inter.response.send_message("Выбери обычную роль ниже высшей роли бота.", ephemeral=True)
+        setattr(self.view, self.setting, role.id)
+        await inter.response.edit_message(content=self.view.status(), view=self.view)
 
+
+class VerifySettingsView(disnake.ui.View):
+    def __init__(self, guild):
+        super().__init__(timeout=300)
+        current = get_verify_settings(guild.id) or (None, None, None)
+        self.channel_id, self.guest_id, self.member_id = current
+        self.add_item(VerifyChannelSelect())
+        self.add_item(VerifyRoleSelect("guest_id", "2. Роль гостя", 1))
+        self.add_item(VerifyRoleSelect("member_id", "3. Роль участника", 2))
+
+    async def interaction_check(self, inter):
+        if not inter.author.guild_permissions.administrator:
+            await inter.response.send_message("Нужны права администратора.", ephemeral=True)
+            return False
+        return True
+
+    def status(self):
+        channel = f"<#{self.channel_id}>" if self.channel_id else "не выбран"
+        guest = f"<@&{self.guest_id}>" if self.guest_id else "не выбрана"
+        member = f"<@&{self.member_id}>" if self.member_id else "не выбрана"
+        return f"Настройка верификации\nКанал: {channel}\nГость: {guest}\nУчастник: {member}\nВыбери значения и нажми «Сохранить»."
+
+    @disnake.ui.button(label="Сохранить", style=disnake.ButtonStyle.success, row=3)
+    async def save(self, button, inter):
+        channel = inter.guild.get_channel(self.channel_id or 0)
+        guest = inter.guild.get_role(self.guest_id or 0)
+        member = inter.guild.get_role(self.member_id or 0)
+        if not isinstance(channel, disnake.TextChannel) or not guest or not member:
+            return await inter.response.send_message("Выбери канал и обе роли.", ephemeral=True)
+        if guest == member:
+            return await inter.response.send_message("Роли гостя и участника должны различаться.", ephemeral=True)
+        if not inter.guild.me.guild_permissions.manage_roles or any(r.is_default() or r.managed or r >= inter.guild.me.top_role for r in (guest, member)):
+            return await inter.response.send_message("Боту нужно право управления ролями; выбранные роли должны быть ниже его роли.", ephemeral=True)
+        await inter.response.defer()
         from cogs.verify import VerifyView
-        embed = disnake.Embed(
-            title="Верификация",
-            description="Нажми на кнопку ниже чтобы изменить ник и получить доступ к серверу.\n\nФормат: **Ник (Имя)**\nПример: `CodeWriter (Борис)`",
-            color=disnake.Color.blurple()
-        )
-        await channel.send(embed=embed, view=VerifyView())
-        await inter.response.send_message(f"✅ Верификация настроена в {channel.mention}", ephemeral=True)
+        embed = disnake.Embed(title="Верификация", description="Нажми кнопку, чтобы изменить ник и получить доступ к серверу.\nФормат: **Ник (Имя)**", color=disnake.Color.blurple())
+        try:
+            await channel.send(embed=embed, view=VerifyView())
+        except disnake.HTTPException:
+            return await inter.followup.send("Не удалось отправить панель. Проверь права бота в выбранном канале.", ephemeral=True)
+        set_verify_settings(inter.guild.id, channel.id, guest.id, member.id)
+        await inter.edit_original_response(content=None, embed=build_status_embed(inter.guild), view=AdminPanelView(inter.guild))
+
+    @disnake.ui.button(label="Назад", style=disnake.ButtonStyle.secondary, row=3)
+    async def back(self, button, inter):
+        await inter.response.edit_message(content=None, embed=build_status_embed(inter.guild), view=AdminPanelView(inter.guild))
 
 
 # --- Главная панель ---
@@ -156,7 +188,8 @@ class AdminPanelView(disnake.ui.View):
         return callback
 
     async def _verify_callback(self, inter: disnake.MessageInteraction):
-        await inter.response.send_modal(VerifyModal())
+        view = VerifySettingsView(inter.guild)
+        await inter.response.edit_message(content=view.status(), embed=None, view=view)
 
 
 class AdminPanelCog(commands.Cog):
