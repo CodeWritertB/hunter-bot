@@ -47,11 +47,21 @@ async def ensure_panel(guild, channel_id, kind, title, description):
             message = await channel.fetch_message(row[0])
         except disnake.NotFound:
             pass
-    embed = disnake.Embed(title=title, description=description, color=disnake.Color.blurple())
+    from cogs.game_menu import GameMenu
+    view = GameMenu(kind) if kind in {"dota", "cs2"} else None
+    if view:
+        description = ("**Твой игровой профиль — в одном месте**\n\n"
+                       "🔗 **Привяжи аккаунт** — нажми кнопку и введи "
+                       + ("ссылку Steam или Steam ID." if kind == "dota" else "ник FACEIT.")
+                       + "\n📊 **Посмотри статистику** — результаты увидишь только ты.\n\n"
+                       "Можно повторно привязать другой профиль. Пароль и код входа не нужны.")
+    embed = disnake.Embed(title=title, description=description, color=disnake.Color.dark_red() if kind == "dota" else disnake.Color.orange() if kind == "cs2" else disnake.Color.blurple())
+    if view:
+        embed.set_footer(text="Выбери действие кнопкой ниже • ответы видны только тебе")
     if message:
-        await message.edit(embed=embed)
+        await message.edit(embed=embed, view=view)
     else:
-        message = await channel.send(embed=embed)
+        message = await channel.send(embed=embed, view=view)
         conn.execute("INSERT OR REPLACE INTO service_panels VALUES (?, ?, ?)", (guild.id, kind, message.id))
         conn.commit()
     if not message.pinned:
