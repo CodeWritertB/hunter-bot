@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import re
+import tempfile
 from urllib.parse import urlparse
 
 import disnake
@@ -118,13 +119,13 @@ async def search_track(query: str) -> dict | list[dict] | None:
     return [track for entry in entries if entry and (track := _track_from_info(entry))] or None
 
 
-def _resolve_audio_url(uri: str) -> str:
+def _resolve_audio_url(uri: str) -> dict:
     info = _extract_info(uri)
     if info and info.get("entries"):
         info = next((entry for entry in info["entries"] if entry), None)
     if not info or not info.get("url"):
         raise DownloadError("yt-dlp не вернул прямой URL аудиопотока")
-    return info["url"]
+    return {"url": info["url"], "headers": info.get("http_headers") or {}}
 
 
 def fmt_time(ms: int) -> str:
@@ -149,6 +150,7 @@ class MusicPlayer:
         self.voice_channel_id: int | None = None
         self.started_at = 0.0
         self.idle_since: float | None = None
+        self.expected_stop = False
         self.generation = 0
         self.playback_error: str | None = None
         self.lock = asyncio.Lock()
@@ -319,6 +321,7 @@ class MusicView(disnake.ui.View):
         voice = inter.guild.voice_client if inter.guild else None
         if not voice or not voice.is_playing() and not voice.is_paused():
             return await inter.response.send_message("Сейчас нечего пропускать.", ephemeral=True)
+        get_player(self.guild_id).expected_stop = True
         voice.stop()
         await inter.response.defer()
 
@@ -419,20 +422,46 @@ class Music(commands.Cog):
         except (disnake.NotFound, disnake.Forbidden, disnake.HTTPException):
             log.exception("Не удалось обновить сообщение музыкального плеера")
 
-    def schedule_track_end(self, guild_id: int, generation: int, error: Exception | None):
-        if error:
-            log.error("[guild=%s] Ошибка воспроизведения: %s", guild_id, error)
+    def schedule_track_end(self, guild_id, generation, error, stderr):
+        try:
+            stderr.seek(0, 2)
+            size = stderr.tell()
+            stderr.seek(max(0, size - 6000))
+            detail = stderr.read().decode("utf-8", errors="replace")
+        finally:
+            stderr.close()
+        # Do not log signed media URLs or authentication headers.
+        safe = re.sub(r"https?://[^\s]+", "[URL]", detail)
+        safe = "\n".join(line for line in safe.splitlines() if not re.search(r"cookie|authorization", line, re.I))
+        if safe.strip():
+            log.warning("[guild=%s] FFmpeg: %s", guild_id, safe[-3000:])
         self.bot.loop.call_soon_threadsafe(
-            lambda: self.bot.loop.create_task(self.on_track_end(guild_id, generation))
+            lambda: self.bot.loop.create_task(self.on_track_end(guild_id, generation, error, detail))
         )
 
-    async def on_track_end(self, guild_id: int, generation: int):
+    async def on_track_end(self, guild_id, generation, error=None, detail=""):
         player = players.get(guild_id)
         if not player or player.generation != generation:
             return
+        elapsed = asyncio.get_running_loop().time() - player.started_at
+        duration = (player.current or {}).get("info", {}).get("length", 0) / 1000
+        failed = not player.expected_stop and (error is not None or (elapsed < 5 and (duration == 0 or duration > elapsed + 5)))
+        player.expected_stop = False
         player.current = None
         player.position = 0
         player.paused = False
+        if failed and not player.queue:
+            reason = "YouTube отклонил сам аудиопоток (HTTP 403)." if "403" in detail else "Аудиопоток завершился сразу после запуска."
+            player.playback_error = reason + " Данные трека получены, но звук не запустился. Диагностика FFmpeg записана в журнал бота."
+            log.error("[guild=%s] Раннее завершение аудио: %.2f сек", guild_id, elapsed)
+            guild = self.bot.get_guild(guild_id)
+            voice = guild.voice_client if guild else None
+            if voice and voice.is_connected():
+                await voice.disconnect(force=True)
+            player.voice_channel_id = None
+            player.idle_since = None
+            await self.update_player_message(player, active=False)
+            return
         await self.start_next_track(guild_id)
 
     async def start_next_track(self, guild_id: int) -> bool:
@@ -455,17 +484,24 @@ class Music(commands.Cog):
                 try:
                     uri = track["info"]["uri"]
                     generation_before_load = player.generation
-                    audio_url = await asyncio.to_thread(_resolve_audio_url, uri)
+                    audio = await asyncio.to_thread(_resolve_audio_url, uri)
                     if player.generation != generation_before_load:
                         return False
                     from cogs.music_repair import ffmpeg_path
+                    headers = "".join(f"{name}: {value}\r\n" for name, value in audio["headers"].items()
+                                      if name.lower() in {"user-agent", "referer", "origin"} and "\r" not in value and "\n" not in value)
+                    import shlex
+                    header_options = " -headers " + shlex.quote(headers) if headers else ""
+                    stderr = tempfile.TemporaryFile()
                     source = disnake.FFmpegOpusAudio(
-                        audio_url,
+                        audio["url"],
                         executable=ffmpeg_path() or FFMPEG_EXECUTABLE,
                         bitrate=128,
-                        before_options="-nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+                        before_options="-nostdin -loglevel warning -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5" + header_options,
+                        stderr=stderr,
                         options="-vn",
                     )
+                    player.expected_stop = False
                     player.generation += 1
                     generation = player.generation
                     player.started_at = asyncio.get_running_loop().time()
@@ -473,7 +509,7 @@ class Music(commands.Cog):
                     player.playback_error = None
                     voice.play(
                         source,
-                        after=lambda error: self.schedule_track_end(guild_id, generation, error),
+                        after=lambda error, g=generation, diagnostic=stderr: self.schedule_track_end(guild_id, g, error, diagnostic),
                     )
                     log.info("[guild=%s] Запущен трек: %s", guild_id, track["info"]["title"])
                     await self.update_player_message(player, active=True)
