@@ -53,38 +53,25 @@ def build_status_embed(guild: disnake.Guild) -> disnake.Embed:
 
 # --- Модальные окна для выбора канала ---
 
-class ChannelModal(disnake.ui.Modal):
-    def __init__(self, setting: str, label: str):
+class ChannelSelect(disnake.ui.ChannelSelect):
+    def __init__(self, setting):
         self.setting = setting
-        super().__init__(title=f"Настроить: {label}", components=[
-            disnake.ui.TextInput(label="ID канала", custom_id="channel_id", placeholder="Скопируй ID канала (ПКМ → Копировать ID)")
-        ])
+        super().__init__(placeholder="Выбери канал", channel_types=[disnake.ChannelType.voice if setting == "lobby" else disnake.ChannelType.text])
 
-    async def callback(self, inter: disnake.ModalInteraction):
-        raw = inter.text_values["channel_id"].strip()
-        if not raw.isdigit():
-            return await inter.response.send_message("❌ Введи числовой ID канала.", ephemeral=True)
-        channel_id = int(raw)
-        channel = inter.guild.get_channel(channel_id)
-        if not channel:
-            return await inter.response.send_message("❌ Канал не найден на этом сервере.", ephemeral=True)
-
-        guild_id = inter.guild.id
-        if self.setting == "welcome":
-            set_channel(guild_id, channel_id)
-        elif self.setting == "lobby":
-            set_lobby(guild_id, channel_id)
-        elif self.setting == "music":
-            set_music_channel(guild_id, channel_id)
-        elif self.setting == "log":
-            set_log_channel(guild_id, channel_id)
-        elif self.setting == "admin_log":
-            set_admin_log_channel(guild_id, channel_id)
+    async def callback(self, inter):
+        if not inter.author.guild_permissions.administrator:
+            return await inter.response.send_message("Нужны права администратора.", ephemeral=True)
+        channel_id = self.values[0].id
+        setters = {"welcome": set_channel, "lobby": set_lobby, "music": set_music_channel, "log": set_log_channel, "admin_log": set_admin_log_channel}
+        if self.setting in setters:
+            setters[self.setting](inter.guild.id, channel_id)
         else:
-            _upsert_server(guild_id, **{f"{self.setting}_channel_id": channel_id})
-
-        log.info(f"[{inter.guild.name}] {inter.author} установил {self.setting} -> #{channel.name}")
-        await inter.response.send_message(f"✅ {channel.mention} установлен.", ephemeral=True)
+            _upsert_server(inter.guild.id, **{f"{self.setting}_channel_id": channel_id})
+        await inter.response.edit_message(content=None, embed=build_status_embed(inter.guild), view=AdminPanelView(inter.guild))
+        if self.setting == "music":
+            cog = inter.bot.get_cog("Music")
+            if cog:
+                await cog.ensure_panel(inter.guild)
 
 
 class VerifyModal(disnake.ui.Modal):
@@ -161,7 +148,9 @@ class AdminPanelView(disnake.ui.View):
 
     def _make_callback(self, setting: str, label: str):
         async def callback(inter: disnake.MessageInteraction):
-            await inter.response.send_modal(ChannelModal(setting, label))
+            view = disnake.ui.View(timeout=120)
+            view.add_item(ChannelSelect(setting))
+            await inter.response.edit_message(content=f"Выбери канал: {label}", view=view)
         return callback
 
     async def _verify_callback(self, inter: disnake.MessageInteraction):

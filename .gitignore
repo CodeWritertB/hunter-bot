@@ -1,13 +1,13 @@
-# Токены и секреты
+# Secrets
 .env
 
-# База данных
+# Database
 *.db
 *.db-shm
 *.db-wal
 backups/
 
-# Логи
+# Logs
 logs/
 
 # Python
@@ -20,3 +20,7 @@ __pycache__/
 # IDE
 .vscode/
 .idea/
+
+# Runtime data and YouTube credentials
+data/
+cookies*.txt

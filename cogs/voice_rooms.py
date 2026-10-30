@@ -153,7 +153,8 @@ class VisibilityView(disnake.ui.View):
     async def toggle(self, inter: disnake.MessageInteraction):
         ow = self.vc.overwrites_for(inter.guild.default_role)
         hidden = ow.view_channel is False
-        await self.vc.set_permissions(inter.guild.default_role, view_channel=hidden)
+        ow.view_channel = hidden
+        await self.vc.set_permissions(inter.guild.default_role, overwrite=ow)
         save_vc_settings(self.vc, self.owner.id)
         log.info(f"[{inter.guild.name}] '{self.vc.name}' {'показана' if hidden else 'скрыта'} ({inter.author})")
         if msg := panel_messages.get(self.vc.id):
@@ -308,7 +309,8 @@ class RoomPanel(disnake.ui.View):
         ow = self.vc.overwrites_for(inter.guild.default_role)
         currently_denied = ow.stream is False
         new_value = None if currently_denied else False
-        await self.vc.set_permissions(inter.guild.default_role, stream=new_value)
+        ow.stream = new_value
+        await self.vc.set_permissions(inter.guild.default_role, overwrite=ow)
         status = "✅ Видео разрешено" if currently_denied else "🚫 Видео запрещено"
         log.info(f"[{inter.guild.name}] '{self.vc.name}' видео: {status} ({inter.author})")
         if msg := panel_messages.get(self.vc.id):
@@ -323,7 +325,8 @@ class RoomPanel(disnake.ui.View):
         # None = не установлено (разрешено по умолчанию), False = явно запрещено
         currently_denied = ow.speak is False
         new_value = None if currently_denied else False  # toggle
-        await self.vc.set_permissions(inter.guild.default_role, speak=new_value)
+        ow.speak = new_value
+        await self.vc.set_permissions(inter.guild.default_role, overwrite=ow)
         status = "✅ Голос разрешён" if currently_denied else "🚫 Голос запрещён"
         log.info(f"[{inter.guild.name}] '{self.vc.name}' голос: {status} ({inter.author})")
         if msg := panel_messages.get(self.vc.id):
@@ -448,7 +451,7 @@ class VoiceRooms(commands.Cog):
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: disnake.Member, before: disnake.VoiceState, after: disnake.VoiceState):
         # Игнорируем бота
-        if member.bot:
+        if member.bot or before.channel == after.channel:
             return
         guild = member.guild
         lobby_id = get_lobby(guild.id)
@@ -459,19 +462,25 @@ class VoiceRooms(commands.Cog):
             name = settings[0] if settings else f"🔊 {member.display_name}"
             user_limit = settings[1] if settings else 0
 
+            overwrites = dict(category.overwrites) if category else {}
+            owner_overwrite = overwrites.get(member, disnake.PermissionOverwrite())
+            owner_overwrite.update(view_channel=True, connect=True, manage_channels=True, move_members=True, mute_members=True)
+            overwrites[member] = owner_overwrite
             vc = await guild.create_voice_channel(
                 name=name,
                 category=category,
                 user_limit=user_limit,
-                overwrites={
-                    guild.default_role: disnake.PermissionOverwrite(view_channel=True, connect=True),
-                    member: disnake.PermissionOverwrite(manage_channels=True, move_members=True, mute_members=True),
-                }
+                overwrites=overwrites
             )
             if settings:
                 locked, hidden = bool(settings[2]), bool(settings[3])
                 if locked or hidden:
-                    await vc.set_permissions(guild.default_role, connect=not locked, view_channel=not hidden)
+                    everyone_overwrite = vc.overwrites_for(guild.default_role)
+                    if locked:
+                        everyone_overwrite.connect = False
+                    if hidden:
+                        everyone_overwrite.view_channel = False
+                    await vc.set_permissions(guild.default_role, overwrite=everyone_overwrite)
 
             await member.move_to(vc)
             add_temp_channel(vc.id, guild.id, member.id)
@@ -501,7 +510,7 @@ class VoiceRooms(commands.Cog):
             else:
                 row = get_temp_channel(vc.id)
                 if row and row[1] == member.id:
-                    new_owner = vc.members[0]
+                    new_owner = next(m for m in vc.members if not m.bot)
                     update_temp_channel_owner(vc.id, new_owner.id)
                     await vc.set_permissions(new_owner, manage_channels=True, move_members=True, mute_members=True)
                     await vc.set_permissions(member, overwrite=None)

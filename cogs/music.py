@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import re
+from urllib.parse import urlparse
 
 import disnake
 from disnake.ext import commands
@@ -53,6 +54,10 @@ def _extract_info(query: str, *, flat: bool = False) -> dict | None:
     }
     if not flat:
         options["format"] = "bestaudio/best"
+    options.update(socket_timeout=20, retries=2, js_runtimes={"node": {}})
+    cookies = os.getenv("YOUTUBE_COOKIES_FILE")
+    if cookies:
+        options["cookiefile"] = cookies
     try:
         with YoutubeDL(options) as ydl:
             return ydl.extract_info(query, download=False)
@@ -89,62 +94,20 @@ def _track_from_info(info: dict) -> dict | None:
     }
 
 
-async def extract_spotify_items(query: str) -> list[str] | None:
-    try:
-        info = await asyncio.to_thread(_extract_info, query, flat=True)
-    except YouTubeBotChallengeError:
-        raise
-    except DownloadError:
-        log.warning("Не удалось получить метаданные Spotify-ссылки")
-        return None
-
-    if not info:
-        return None
-    if info.get("_type") in {"playlist", "multi_video"} or info.get("entries"):
-        return [
-            formatted
-            for entry in (info.get("entries") or [])[:MAX_PLAYLIST_TRACKS]
-            if entry and (formatted := format_search_query(entry))
-        ]
-    formatted = format_search_query(info)
-    return [formatted] if formatted else None
-
-
 async def search_track(query: str) -> dict | list[dict] | None:
-    if is_spotify_url(query):
-        items = await extract_spotify_items(query)
-        if not items:
-            return None
-        tracks: list[dict] = []
-        for item in items[:MAX_PLAYLIST_TRACKS]:
-            result = await search_track(item)
-            if isinstance(result, list):
-                tracks.extend(result)
-            elif result:
-                tracks.append(result)
-            if len(tracks) >= MAX_PLAYLIST_TRACKS:
-                break
-        return tracks[:MAX_PLAYLIST_TRACKS] or None
-
-    identifier = query if query.startswith(("http://", "https://")) else f"ytsearch1:{query}"
-    try:
-        info = await asyncio.to_thread(_extract_info, identifier, flat=True)
-    except YouTubeBotChallengeError:
-        raise
-    except DownloadError:
-        log.warning("yt-dlp не смог найти трек по запросу")
-        return None
-
+    query = query.strip()
+    if query.startswith(("http://", "https://")):
+        host = (urlparse(query).hostname or "").lower()
+        if host not in {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"}:
+            raise ValueError("Поддерживаются только ссылки YouTube или поиск по названию.")
+        identifier = query
+    else:
+        identifier = f"ytsearch1:{query}"
+    info = await asyncio.to_thread(_extract_info, identifier, flat=True)
     if not info:
         return None
-    if info.get("_type") in {"playlist", "multi_video"} or info.get("entries"):
-        tracks = [
-            track
-            for entry in (info.get("entries") or [])[:MAX_PLAYLIST_TRACKS]
-            if entry and (track := _track_from_info(entry))
-        ]
-        return tracks or None
-    return _track_from_info(info)
+    entries = list(info.get("entries") or [info])[:MAX_PLAYLIST_TRACKS]
+    return [track for entry in entries if entry and (track := _track_from_info(entry))] or None
 
 
 def _resolve_audio_url(uri: str) -> str:
@@ -207,7 +170,7 @@ def build_embed(player: MusicPlayer) -> disnake.Embed:
             inline=False,
         )
     else:
-        embed.add_field(name="Сейчас играет", value="Ничего", inline=False)
+        embed.add_field(name="Готов к воспроизведению", value="Зайди в голосовой канал и используй `/music` с названием или ссылкой YouTube.", inline=False)
 
     if player.queue:
         lines = [f"{i + 1}. {track.get('info', {}).get('title', '?')}" for i, track in enumerate(player.queue[:5])]
@@ -216,14 +179,23 @@ def build_embed(player: MusicPlayer) -> disnake.Embed:
         embed.add_field(name="Очередь", value="\n".join(lines), inline=False)
     else:
         embed.add_field(name="Очередь", value="Пусто", inline=False)
+    if player.playback_error:
+        embed.add_field(name="Ошибка воспроизведения", value=player.playback_error[:1024], inline=False)
     return embed
 
 
 class MusicView(disnake.ui.View):
     def __init__(self, guild_id: int):
-        super().__init__(timeout=1800)
+        super().__init__(timeout=None)
         self.guild_id = guild_id
         self._update_pause_button()
+
+    async def interaction_check(self, inter):
+        voice = inter.guild.voice_client if inter.guild else None
+        if not voice or not inter.author.voice or inter.author.voice.channel != voice.channel:
+            await inter.response.send_message("Зайди в голосовой канал бота, чтобы управлять музыкой.", ephemeral=True)
+            return False
+        return True
 
     def _update_pause_button(self):
         player = players.get(self.guild_id)
@@ -262,6 +234,7 @@ class MusicView(disnake.ui.View):
 
     @disnake.ui.button(emoji="⏹", style=disnake.ButtonStyle.danger, custom_id="music_stop")
     async def stop_btn(self, _button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        await inter.response.defer()
         player = get_player(self.guild_id)
         player.generation += 1
         player.queue.clear()
@@ -274,16 +247,67 @@ class MusicView(disnake.ui.View):
             voice.stop()
             await voice.disconnect()
         player.voice_channel_id = None
-        await inter.response.edit_message(embed=build_embed(player), view=None)
+        await inter.edit_original_response(embed=build_embed(player), view=self)
 
 
 class Music(commands.Cog):
     def __init__(self, bot: commands.InteractionBot):
         self.bot = bot
+        self.panel_lock = asyncio.Lock()
         self.update_task = bot.loop.create_task(self.progress_update_loop())
 
     def cog_unload(self):
         self.update_task.cancel()
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        for guild in self.bot.guilds:
+            try:
+                await self.ensure_panel(guild)
+            except disnake.HTTPException:
+                log.exception("Не удалось восстановить музыкальную панель")
+
+    @commands.Cog.listener()
+    async def on_raw_message_delete(self, payload):
+        player = players.get(payload.guild_id)
+        if player and player.message and player.message.id == payload.message_id:
+            player.message = None
+            guild = self.bot.get_guild(payload.guild_id)
+            if guild:
+                try:
+                    await self.ensure_panel(guild)
+                except disnake.HTTPException:
+                    log.exception("Не удалось восстановить удалённый плеер")
+
+    async def ensure_panel(self, guild):
+        async with self.panel_lock:
+            await self._ensure_panel(guild)
+
+    async def _ensure_panel(self, guild):
+        from db.database import _get_server, _upsert_server, ensure_column, conn
+        ensure_column("servers", "music_message_id", "INTEGER")
+        conn.commit()
+        channel_id = get_music_channel(guild.id)
+        channel = guild.get_channel(channel_id) if channel_id else None
+        if not isinstance(channel, disnake.TextChannel):
+            return
+        player = get_player(guild.id)
+        message_id = _get_server(guild.id, "music_message_id")
+        if player.message and player.message.channel.id != channel.id:
+            try:
+                await player.message.delete()
+            except disnake.HTTPException:
+                pass
+            player.message = None
+        if message_id:
+            try:
+                player.message = await channel.fetch_message(message_id)
+            except disnake.NotFound:
+                player.message = None
+        if not player.message:
+            player.message = await channel.send(embed=build_embed(player), view=MusicView(guild.id))
+            _upsert_server(guild.id, music_message_id=player.message.id)
+        await self.update_player_message(player, active=True)
 
     @staticmethod
     def current_position(player: MusicPlayer) -> int:
@@ -300,7 +324,7 @@ class Music(commands.Cog):
         try:
             await player.message.edit(
                 embed=build_embed(player),
-                view=MusicView(player.message.guild.id) if active and player.message.guild else None,
+                view=MusicView(player.message.guild.id),
             )
         except (disnake.NotFound, disnake.Forbidden, disnake.HTTPException):
             log.exception("Не удалось обновить сообщение музыкального плеера")
@@ -340,7 +364,10 @@ class Music(commands.Cog):
                 player.paused = False
                 try:
                     uri = track["info"]["uri"]
+                    generation_before_load = player.generation
                     audio_url = await asyncio.to_thread(_resolve_audio_url, uri)
+                    if player.generation != generation_before_load:
+                        return False
                     source = disnake.FFmpegOpusAudio(
                         audio_url,
                         executable=FFMPEG_EXECUTABLE,
@@ -352,6 +379,7 @@ class Music(commands.Cog):
                     generation = player.generation
                     player.started_at = asyncio.get_running_loop().time()
                     player.idle_since = None
+                    player.playback_error = None
                     voice.play(
                         source,
                         after=lambda error: self.schedule_track_end(guild_id, generation, error),
@@ -359,15 +387,27 @@ class Music(commands.Cog):
                     log.info("[guild=%s] Запущен трек: %s", guild_id, track["info"]["title"])
                     await self.update_player_message(player, active=True)
                     return True
+                except DownloadError as error:
+                    player.playback_error = (
+                        "Не удалось воспроизвести трек: источник недоступен или защищён DRM. "
+                        "Попробуй другой результат или ссылку."
+                    )
+                    log.warning(
+                        "[guild=%s] Пропущен недоступный трек %s: %s",
+                        guild_id,
+                        track.get("info", {}).get("title", "unknown"),
+                        error,
+                    )
                 except YouTubeBotChallengeError:
                     player.playback_error = (
-                        "YouTube отклонил запрос с IP хостинга. Попробуй ссылку с другого поддерживаемого аудиосервиса."
+                        "YouTube отклонил запрос с IP хостинга. Нужны актуальный yt-dlp, JavaScript runtime и при необходимости cookies YouTube."
                     )
                     log.warning(
                         "[guild=%s] YouTube отклонил запросы с IP хостинга",
                         guild_id,
                     )
-                except (DownloadError, OSError, disnake.DiscordException):
+                except (OSError, disnake.DiscordException):
+                    player.playback_error = "Не удалось запустить аудио. Проверь FFmpeg и права подключения бота."
                     log.exception(
                         "[guild=%s] Не удалось запустить трек: %s",
                         guild_id,
@@ -408,7 +448,7 @@ class Music(commands.Cog):
         before: disnake.VoiceState,
         _after: disnake.VoiceState,
     ):
-        if member.bot or not before.channel:
+        if member.bot or not before.channel or before.channel == _after.channel:
             return
         player = players.get(member.guild.id)
         if not player or not player.current or before.channel.id != player.voice_channel_id:
@@ -434,11 +474,14 @@ class Music(commands.Cog):
     )
     async def set_music_channel(self, inter: disnake.ApplicationCommandInteraction, channel: disnake.TextChannel):
         db_set_music_channel(inter.guild.id, channel.id)
+        await self.ensure_panel(inter.guild)
         await inter.response.send_message(f"✅ Музыкальный канал: {channel.mention}", ephemeral=True)
 
     @commands.slash_command(description="Воспроизвести трек в голосовом канале")
     async def music(self, inter: disnake.ApplicationCommandInteraction, query: str):
         music_channel_id = get_music_channel(inter.guild.id)
+        if not music_channel_id:
+            return await inter.response.send_message("Администратор должен выбрать музыкальный канал через /admin.", ephemeral=True)
         if music_channel_id and inter.channel.id != music_channel_id:
             channel = inter.guild.get_channel(music_channel_id)
             return await inter.response.send_message(
@@ -448,17 +491,12 @@ class Music(commands.Cog):
         if not inter.author.voice or not inter.author.voice.channel:
             return await inter.response.send_message("❌ Зайди в голосовой канал.", ephemeral=True)
 
-        await inter.response.defer()
+        await inter.response.defer(ephemeral=True)
         try:
             result = await search_track(query)
-        except YouTubeBotChallengeError:
-            return await inter.edit_original_response(
-                content=(
-                    "❌ YouTube отклонил запросы с IP хостинга как автоматические. "
-                    "Это ограничение YouTube, а не ошибка Discord-бота. Попробуй ссылку "
-                    "из другого источника, например SoundCloud, или обратись к хостингу."
-                )
-            )
+        except (YouTubeBotChallengeError, DownloadError, ValueError) as error:
+            log.warning("Ошибка поиска YouTube: %s", error)
+            return await inter.edit_original_response(content="Не удалось загрузить YouTube. Проверь ссылку; при блокировке нужны актуальный yt-dlp, Node.js и cookies YouTube. Другие сервисы не используются.")
         tracks = result if isinstance(result, list) else [result] if result else []
         if not tracks:
             return await inter.edit_original_response(content="❌ Не удалось найти трек. Проверь ссылку или запрос.")
@@ -500,16 +538,8 @@ class Music(commands.Cog):
         was_playing = player.current is not None
         player.queue.extend(tracks)
         player.idle_since = None
-        if player.message:
-            try:
-                await player.message.delete()
-            except (disnake.NotFound, disnake.Forbidden, disnake.HTTPException):
-                log.warning("Не удалось удалить старое сообщение музыкального плеера")
-        player.message = await inter.edit_original_response(
-            content=None,
-            embed=build_embed(player),
-            view=MusicView(inter.guild.id),
-        )
+        await self.ensure_panel(inter.guild)
+        await self.update_player_message(player, active=True)
 
         if not was_playing:
             if not await self.start_next_track(inter.guild.id):
@@ -530,20 +560,7 @@ class Music(commands.Cog):
             inter.author,
             added_count,
         )
-        if was_playing:
-            await inter.edit_original_response(
-                content=f"✅ В очередь добавлено **{added_count}** трек(ов).",
-                embed=build_embed(player),
-                view=MusicView(inter.guild.id),
-            )
-        try:
-            await player.message.pin()
-            async for message in inter.channel.history(limit=5):
-                if message.type == disnake.MessageType.pins_add:
-                    await message.delete()
-                    break
-        except (disnake.Forbidden, disnake.HTTPException):
-            log.debug("Не удалось закрепить сообщение плеера", exc_info=True)
+        await inter.edit_original_response(content=f"✅ Добавлено треков: {added_count}. Плеер находится в назначенном музыкальном канале.")
 
 
 def setup(bot: commands.InteractionBot):

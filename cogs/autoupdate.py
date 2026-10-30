@@ -22,6 +22,7 @@ def run_git(args: list[str]) -> tuple[int, str]:
     result = subprocess.run(
         ["git"] + args,
         capture_output=True, text=True,
+        timeout=120,
         cwd=os.path.dirname(os.path.dirname(__file__))
     )
     return result.returncode, (result.stdout + result.stderr).strip()
@@ -61,6 +62,15 @@ class AutoUpdate(commands.Cog):
 
         log.info(f"Найдено {out.strip()} новых коммитов, обновляемся...")
 
+        # Never replace a tracked database during an update.
+        code, tracked = await asyncio.to_thread(run_git, ["ls-files", "*.db", "*.db-wal", "*.db-shm"])
+        if code != 0 or tracked:
+            log.error("Обновление отменено: не удалось проверить исключение баз из Git: %s", tracked)
+            return
+        from db.storage import backup_database
+        backup_path = backup_database("update")
+        log.info("База сохранена перед обновлением: %s", backup_path)
+
         # Делаем pull
         code, out = await loop.run_in_executor(None, lambda: run_git(["pull", "--ff-only"]))
         if code != 0:
@@ -72,6 +82,8 @@ class AutoUpdate(commands.Cog):
         # Перезагружаем все модули
         success, failed = [], []
         for cog in COGS:
+            if cog == "cogs.autoupdate":
+                continue
             try:
                 self.bot.reload_extension(cog)
                 success.append(cog.replace("cogs.", ""))

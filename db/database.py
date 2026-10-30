@@ -3,7 +3,9 @@ import os
 from datetime import datetime, timezone
 
 # Подключение к БД с поддержкой многопоточности
-conn = sqlite3.connect(os.path.join(os.path.dirname(__file__), "..", "bot.db"), check_same_thread=False)
+from db.storage import prepare_database
+
+conn = sqlite3.connect(prepare_database(), check_same_thread=False, timeout=30)
 conn.execute("PRAGMA journal_mode=WAL")      # Параллельные чтения без блокировок
 conn.execute("PRAGMA synchronous=NORMAL")    # Баланс между скоростью и надёжностью
 conn.execute("PRAGMA cache_size=-8000")      # Кэш 8MB
