@@ -35,13 +35,27 @@ class Streaks(commands.Cog):
 
     async def daily_reset_loop(self):
         await self.bot.wait_until_ready()
+        startup = True
         while not self.bot.is_closed():
             today = datetime.now(MSK).date()
             for guild in self.bot.guilds:
+                checked = updated = failed = 0
                 for member in guild.members:
-                    if eligible(member):
-                        await self.sync_member(member, datetime.now(MSK).date(),
-                                               bool(member.voice and member.voice.channel))
+                    if not eligible(member):
+                        continue
+                    checked += 1
+                    try:
+                        updated += await self.sync_member(
+                            member, datetime.now(MSK).date(), bool(member.voice and member.voice.channel)
+                        )
+                    except Exception:
+                        failed += 1
+                        log.exception("Не удалось сверить стрик участника %s", member.id)
+                log.info(
+                    "Проверка стриков (%s), сервер %s: проверено %d, обновлено записей %d, ошибок сверки %d",
+                    "запуск" if startup else "ежедневно", guild.id, checked, updated, failed,
+                )
+            startup = False
             midnight = datetime.combine(today + timedelta(days=1), datetime.min.time(), MSK)
             await asyncio.sleep(max(0, (midnight - datetime.now(MSK)).total_seconds()))
 
@@ -61,7 +75,8 @@ class Streaks(commands.Cog):
             streak, cold, last_date = 0, cold + missed, yesterday.isoformat()
         if active and (last_date != today.isoformat() or not streak):
             streak, cold, last_date = streak + 1, 0, today.isoformat()
-        if (streak, cold, last_date) != previous:
+        changed = (streak, cold, last_date) != previous
+        if changed:
             update_streak(guild_id, member.id, streak, last_date, cold)
         current = member.display_name
         nickname = build_nick(current, streak, cold)
@@ -70,6 +85,7 @@ class Streaks(commands.Cog):
                 await member.edit(nick=nickname if nickname != member.name else None)
             except disnake.HTTPException:
                 log.warning("Не удалось изменить ник участника %s", member.id)
+        return changed
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
