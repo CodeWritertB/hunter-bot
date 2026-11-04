@@ -39,6 +39,13 @@ class Streaks(commands.Cog):
         while not self.bot.is_closed():
             today = datetime.now(MSK).date()
             for guild in self.bot.guilds:
+                if startup and guild.me and guild.me.nick:
+                    nickname = build_nick(guild.me.nick, 0, 0)
+                    if nickname != guild.me.nick:
+                        try:
+                            await guild.me.edit(nick=nickname or None, reason="Удаление старого стрика бота")
+                        except disnake.HTTPException:
+                            log.warning("Не удалось убрать старый стрик бота на сервере %s", guild.id)
                 checked = updated = failed = 0
                 for member in guild.members:
                     if not eligible(member):
