@@ -9,24 +9,32 @@ FONT = Path(__file__).resolve().parent.parent / "assets" / "NotoSans-Regular.ttf
 
 
 def render_card(embed, guild):
+    finished = "завершён" in embed.title
+    winner = None
+    if finished:
+        result = embed.title.split("завершён", 1)[-1]
+        if "Силы Света" in result:
+            winner = 0
+        elif "Силы Тьмы" in result:
+            winner = 1
     backdrop = Image.new("RGB", (360, 280))
     pixels = backdrop.load()
     for y in range(280):
         for x in range(360):
-            teal = math.exp(-((x - 15) ** 2 + (y - 90) ** 2) / 18000)
-            violet = math.exp(-((x - 285) ** 2 + (y - 20) ** 2) / 13000)
-            ember = math.exp(-((x - 350) ** 2 + (y - 235) ** 2) / 11000)
-            pixels[x, y] = (int(8 + 40 * violet + 49 * ember),
-                            int(12 + 53 * teal + 12 * violet),
-                            int(25 + 55 * violet + 36 * teal))
-    image = backdrop.resize((1440, 1120), Image.Resampling.BICUBIC)
-    glow = Image.new("RGBA", image.size)
-    ornament = ImageDraw.Draw(glow)
-    for offset in range(4):
-        ornament.arc((800 + offset * 38, -390 + offset * 38, 1700 + offset * 38, 510 + offset * 38),
-                     20, 310, fill=(179, 108, 255, 95), width=2)
-    ornament.polygon([(0, 720), (580, 1120), (340, 1120), (0, 900)], fill=(42, 221, 185, 16))
-    image = Image.alpha_composite(image.convert("RGBA"), glow).convert("RGB")
+            green = math.exp(-((x - 25) ** 2 + (y - 50) ** 2) / 12000)
+            red = math.exp(-((x - 335) ** 2 + (y - 50) ** 2) / 12000)
+            gold = math.exp(-((x - (55 if winner == 0 else 305)) ** 2 + (y - 75) ** 2) / 8500) if winner is not None else 0
+            pixels[x, y] = (int(10 + 57 * red + 87 * gold),
+                            int(15 + 43 * green + 49 * gold),
+                            int(13 + 15 * green + 8 * red))
+    image = backdrop.resize((1440, 1120), Image.Resampling.BICUBIC).convert("RGBA")
+    if winner is not None:
+        glow = Image.new("RGBA", image.size)
+        painter = ImageDraw.Draw(glow)
+        left = 50 if winner == 0 else 780
+        painter.ellipse((left, 65, left + 600, 395), fill=(255, 148, 30, 95))
+        image = Image.alpha_composite(image, glow.filter(ImageFilter.GaussianBlur(55)))
+    image = image.convert("RGB")
     draw = ImageDraw.Draw(image)
     def font(size):
         return ImageFont.truetype(str(FONT), size)
@@ -52,33 +60,50 @@ def render_card(embed, guild):
         while text and draw.textlength(text, font=face) > width:
             text = text[:-2]
         draw.text(xy, text, font=face, fill=color)
-    for x in range(1440):
-        draw.line((x, 0, x, 5), fill=(65 + x * 110 // 1440, 190 - x * 100 // 1440, 160))
-    label("TSH   /   ЦЕНТР МАТЧЕЙ", (56, 35), 20, "#8d9cb2", 1200)
-    finished = "завершён" in embed.title
-    label("DOTA 2", (52, 78), 70, "#f2eee7", 1000)
-    draw.rounded_rectangle((1160, 65, 1384, 112), 20, fill="#182f2c" if not finished else "#262e40")
-    label("МАТЧ ИДЁТ" if not finished else "МАТЧ ЗАВЕРШЁН", (1180, 76), 17, "#6be1b2", 200)
-    title = clean(embed.title)
-    title = re.sub(r"^[^А-Яа-яA-Za-z0-9]+", "", title)
-    label(title, (57, 179), 30, "#f2eee7", 1300)
-    if embed.description:
-        label(embed.description, (57, 229), 20, width=1300)
+    def centered(text, center, y, size, color, width):
+        face = font(size)
+        text = clean(text)
+        while text and draw.textlength(text, font=face) > width:
+            text = text[:-1]
+        draw.text((center - draw.textlength(text, font=face) / 2, y), text, font=face, fill=color)
+    draw.line((56, 22, 1384, 22), fill="#a96a32", width=2)
+    label("TSH  /  DOTA 2", (56, 42), 21, "#dcc7a7")
+    label("ЦЕНТР МАТЧЕЙ", (1160, 42), 18, "#c7ad87", 224)
     fields = list(embed.fields)
     teams = [f for f in fields if "Силы" in f.name]
-    summary = [f for f in fields if "Силы" not in f.name]
-    for index, field in enumerate(summary[:2]):
-        left = 56 + index * 670
-        draw.rounded_rectangle((left, 280, left + 642, 386), 18, fill="#202342", outline="#545180", width=2)
-        label(field.name, (left + 24, 295), 17)
-        label(field.value, (left + 24, 324), 32, "#ffffff", 590)
-    top = 426 if summary else 292
+    score_field = next((f for f in fields if f.name == "Счёт"), None)
+    scores = re.findall(r"\d+", clean(score_field.value)) if score_field else []
+    duration = next((clean(f.value) for f in fields if f.name == "Длительность"), None)
+    match_number = re.search(r"#(\d+)", embed.title)
+    centered("МАТЧ " + (match_number.group(1) if match_number else ""), 720, 94, 19, "#d6bea0", 410)
+    centered("ЗАВЕРШЁН" if finished else "ИДЁТ СЕЙЧАС", 720, 126, 23, "#ffcd77", 410)
+    centered("VS", 720, 177, 62, "#f4debb", 250)
+    mode = clean(embed.description or "")
+    if not mode and "•" in embed.title:
+        mode = clean(embed.title.split("•", 1)[1])
+    centered(mode or "Режим уточняется", 720, 275, 18, "#d8c5aa", 400)
+    centered(duration or "Длительность уточняется", 720, 311, 25, "#f6ebda", 400)
+    for side, team in enumerate(teams[:2]):
+        center = 300 if side == 0 else 1140
+        accent = "#71df83" if side == 0 else "#ff7770"
+        name = re.sub(r"\s*\[.*?\]", "", clean(team.name))
+        centered(name.upper(), center, 126, 33, accent, 430)
+        score = scores[side] if len(scores) == 2 else None
+        if score is None:
+            live_score = re.search(r"\[(\d+)\]", team.name)
+            score = live_score.group(1) if live_score else "—"
+        centered(score, center, 175, 98, "#ffd18a" if winner == side else "#faf1de", 430)
+        centered("УБИЙСТВ", center, 300, 16, "#ccb99e", 430)
+        if winner == side:
+            draw.rounded_rectangle((center - 115, 346, center + 115, 383), 12, fill="#9e551e", outline="#ffc56e", width=2)
+            centered("ПОБЕДА", center, 352, 19, "#fff0c5", 220)
+    top = 422
     for side, field in enumerate(teams[:2]):
         left = 56 + side * 670
-        accent = "#47f4c2" if side == 0 else "#ff747d"
-        draw.rounded_rectangle((left, top, left + 642, 1037), 20, fill="#111c30", outline=accent, width=2)
-        draw.rounded_rectangle((left, top, left + 642, top + 65), 18, fill="#1b2d2d" if side == 0 else "#30242c")
-        label(field.name, (left + 24, top + 18), 23, accent)
+        accent = "#ffc16a" if winner == side else ("#63bd76" if side == 0 else "#d96055")
+        draw.rounded_rectangle((left, top, left + 642, 1037), 20, fill="#182019" if side == 0 else "#241a18", outline=accent, width=2)
+        draw.rounded_rectangle((left, top, left + 642, top + 65), 18, fill="#4b331e" if winner == side else ("#203b28" if side == 0 else "#42241f"))
+        label("СОСТАВ КОМАНДЫ", (left + 24, top + 18), 20, accent)
         y = top + 88
         for line in clean(field.value).splitlines():
             line = line.strip()
@@ -87,7 +112,7 @@ def render_card(embed, guild):
             if y > 1006:
                 break
             stats = line.startswith(("У/С/П:", "Добивания:", "Победы:"))
-            label(line, (left + 24, y), 17 if stats else 21, "#a1b2c8" if stats else "#f0f4fa", 592)
+            label(line, (left + 24, y), 15 if stats else 21, "#bcb7a6" if stats else "#f7efdf", 592)
             y += 24 if stats else 32
             if stats:
                 y += 4
