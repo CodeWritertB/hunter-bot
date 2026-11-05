@@ -54,7 +54,7 @@ def load_assets(players):
     return heroes, items, pictures
 
 
-def render_card(embed, guild, match_data=None, players_info=None):
+def render_card(embed, guild, match_data=None, players_info=None, public_profiles=None):
     finished = "завершён" in embed.title
     winner = None
     if finished:
@@ -156,6 +156,37 @@ def render_card(embed, guild, match_data=None, players_info=None):
             image.paste(tile, box[:2])
         else:
             draw.rounded_rectangle(box, 5, fill="#29302d")
+    def portrait(path, box, server, dotabuff):
+        width, height = box[2] - box[0], box[3] - box[1]
+        tile = Image.new("RGB", (width, height), "#29302d")
+        if pictures.get(path) is not None:
+            tile = ImageOps.fit(pictures[path], (width, height))
+        mask = Image.new("L", (width, height))
+        ImageDraw.Draw(mask).rounded_rectangle((0, 0, width - 1, height - 1), 8, fill=255)
+        image.paste(tile, box[:2], mask)
+        first = "#66e891" if server else "#ed9c47" if dotabuff else "#51574d"
+        draw.rounded_rectangle((box[0] - 2, box[1] - 2, box[2] + 1, box[3] + 1), 10, outline=first, width=2)
+        if server and dotabuff:
+            draw.rounded_rectangle((box[0] - 6, box[1] - 6, box[2] + 5, box[3] + 5), 13, outline="#ed9c47", width=2)
+
+    def player_name(text, xy, server, dotabuff):
+        text = clean(text)
+        face = font(22)
+        while text and draw.textlength(text, font=face) > 286:
+            text = text[:-1]
+        if not (server or dotabuff):
+            return label(text, xy, 22, "#fff0d9", 286)
+        start = (102, 232, 145) if server else (237, 156, 71)
+        end = (237, 156, 71) if dotabuff else (187, 255, 199)
+        mask = Image.new("L", (300, 40))
+        ImageDraw.Draw(mask).text((0, 0), text, font=face, fill=255)
+        gradient = Image.new("RGB", mask.size)
+        pen = ImageDraw.Draw(gradient)
+        for x in range(300):
+            color = tuple(int(a + (b - a) * min(1, x / max(1, draw.textlength(text, font=face)))) for a, b in zip(start, end))
+            pen.line((x, 0, x, 40), fill=color)
+        image.paste(gradient, xy, mask)
+
     for side, field in enumerate(teams[:2]):
         left = 56 + side * 670
         accent = "#ffc16a" if winner == side else ("#63bd76" if side == 0 else "#d96055")
@@ -167,11 +198,13 @@ def render_card(embed, guild, match_data=None, players_info=None):
             y = top + 20 + index * 214
             draw.rounded_rectangle((left, y, left + 642, y + 202), 12, fill="#151d1a" if side == 0 else "#201a19")
             hero = heroes.get(str(player.get("hero_id", 0)), {})
-            paste(hero.get("img"), (left + 14, y + 18, left + 100, y + 70))
             account = player.get("account_id", player.get("steam32"))
             linked = next((entry for entry in (players_info or []) if account and entry.get("steam32") == account and entry.get("linked")), None)
             name = (linked or player).get("mention") or player.get("personaname") or hero.get("localized_name", "Игрок")
-            label(name, (left + 112, y + 12), 22, "#fff0d9", 286)
+            server = bool(linked)
+            dotabuff = bool((public_profiles or {}).get(int(account or 0)))
+            portrait(hero.get("img"), (left + 14, y + 18, left + 100, y + 70), server, dotabuff)
+            player_name(name, (left + 112, y + 12), server, dotabuff)
             label(hero.get("localized_name", "Герой"), (left + 112, y + 45), 16, "#c5bba7", 286)
             label("У / С / П   " + " / ".join(str(player.get(key, "—")) for key in ("kills", "deaths", "assists")),
                   (left + 112, y + 75), 18, "#f6d39b", 286)

@@ -370,7 +370,9 @@ def match_links(guild, match_id, players_info):
 
 async def match_card(embed, guild, match_data=None, players_info=None):
     from cogs.dota_card import render_card
-    buffer = await asyncio.to_thread(render_card, embed, guild, match_data, players_info)
+    from cogs.dotabuff_status import statuses
+    public = await statuses((match_data or {}).get("players") or players_info or [])
+    buffer = await asyncio.to_thread(render_card, embed, guild, match_data, players_info, public)
     image_embed = disnake.Embed(url=embed.url, color=embed.color)
     image_embed.set_image(url="attachment://dota-match.png")
     return image_embed, disnake.File(buffer, filename="dota-match.png")
