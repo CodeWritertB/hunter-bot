@@ -1,6 +1,5 @@
 import asyncio
 import io
-import re
 from pathlib import Path
 import disnake
 from PIL import Image, ImageDraw, ImageFont, ImageOps
@@ -11,21 +10,9 @@ FONT = Path(__file__).resolve().parent.parent / "assets" / "NotoSans-Regular.ttf
 def render_room(vc, owner, icon_bytes):
     image=Image.new("RGB",(640,620),"#101b1a")
     draw=ImageDraw.Draw(image)
-    def readable(value):
-        value=str(value)
-        def flag(match):
-            return "[" + "".join(chr(ord(char)-0x1F1E6+65) for char in match.group()) + "]"
-        value=re.sub(r"[\U0001F1E6-\U0001F1FF]{2}",flag,value)
-        value=value.replace("🔥","стрик ").replace("❄","пропуски ")
-        return re.sub(r"[\U0001F000-\U0001FAFF\uFE0F\u200D]","",value).strip()
+    from cogs.emoji_text import draw_emoji_text
     def text(value, xy, size=30, color="#e4e8df", width=590):
-        face=ImageFont.truetype(str(FONT),size)
-        value=readable(value)
-        if draw.textlength(value,font=face)>width:
-            while value and draw.textlength(value+"…",font=face)>width:
-                value=value[:-1]
-            value+="…"
-        draw.text(xy,value,font=face,fill=color)
+        draw_emoji_text(image, value, xy, FONT, size, color, width)
     draw.rectangle((0,0,640,6),fill="#6bcfa0")
     if icon_bytes:
         try:
