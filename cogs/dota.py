@@ -368,9 +368,9 @@ def match_links(guild, match_id, players_info):
     return view
 
 
-async def match_card(embed, guild):
+async def match_card(embed, guild, match_data=None, players_info=None):
     from cogs.dota_card import render_card
-    buffer = await asyncio.to_thread(render_card, embed, guild)
+    buffer = await asyncio.to_thread(render_card, embed, guild, match_data, players_info)
     image_embed = disnake.Embed(url=embed.url, color=embed.color)
     image_embed.set_image(url="attachment://dota-match.png")
     return image_embed, disnake.File(buffer, filename="dota-match.png")
@@ -564,13 +564,13 @@ class Dota(commands.Cog):
                 # Если матч уже завершён — сразу показываем итоги
                 if not is_live and match_data and match_data.get("duration"):
                     embed = build_finished_embed(match_id, players_info, match_data, heroes_list)
-                    card, image = await match_card(embed, guild)
+                    card, image = await match_card(embed, guild, match_data if not is_live else None, players_info)
                     await channel.send(embed=card, file=image, view=match_links(guild, match_id, players_info))
                     live_messages[guild.id][match_id] = (None, players_info)
                     log.info(f"[{guild.name}] Матч #{match_id} уже завершён, показываем итоги")
                 else:
                     embed = build_live_embed(match_id, players_info, heroes_list)
-                    card, image = await match_card(embed, guild)
+                    card, image = await match_card(embed, guild, match_data if not is_live else None, players_info)
                     msg = await channel.send(embed=card, file=image, view=match_links(guild, match_id, players_info))
                     live_messages[guild.id][match_id] = (msg, players_info)
                     log.info(f"[{guild.name}] Новый матч #{match_id} обнаружен для {member}")
@@ -587,7 +587,7 @@ class Dota(commands.Cog):
                     # Матч завершён — обновляем финальным embed
                     finished_embed = build_finished_embed(match_id, players_info, match_data, heroes_list)
                     try:
-                        card, image = await match_card(finished_embed, guild)
+                        card, image = await match_card(finished_embed, guild, match_data, players_info)
                         await msg.edit(embed=card, attachments=[], file=image, view=match_links(guild, match_id, players_info))
                     except Exception:
                         pass
@@ -648,7 +648,7 @@ class Dota(commands.Cog):
                                 p["lobby_type"] = lt
                     live_embed = build_live_embed(match_id, players_info, heroes_list)
                     try:
-                        card, image = await match_card(live_embed, guild)
+                        card, image = await match_card(live_embed, guild, None, players_info)
                         await msg.edit(embed=card, attachments=[], file=image, view=match_links(guild, match_id, players_info))
                     except Exception:
                         pass
