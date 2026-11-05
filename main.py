@@ -80,21 +80,20 @@ bot.load_extension("cogs.autoupdate")   # Автообновление с GitHub
 
 async def status_loop():
     """Цикл динамического статуса бота — обновляется каждые 15 секунд."""
-    from cogs.voice_rooms import panel_messages
     from cogs.music import players
 
     idx = 0
     await bot.wait_until_ready()
     while not bot.is_closed():
         try:
-            active_rooms = sum(1 for cid in panel_messages if bot.get_channel(cid))
-
-            # Считаем сколько человек сейчас в приватных комнатах
-            people_in_rooms = sum(
-                len([m for m in bot.get_channel(cid).members if not m.bot])
-                for cid in panel_messages
-                if bot.get_channel(cid)
-            ) if panel_messages else 0
+            active_rooms = 0
+            people_in_rooms = 0
+            for guild in bot.guilds:
+                for channel in guild.voice_channels:
+                    members = [member for member in channel.members if not member.bot]
+                    if members:
+                        active_rooms += 1
+                        people_in_rooms += len(members)
 
             # Ищем текущий играющий трек среди всех плееров
             current_track = None
