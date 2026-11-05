@@ -346,6 +346,28 @@ def build_finished_embed(match_id: int, players_info: list, match_data: dict | N
     return embed
 
 
+def match_links(guild, match_id, players_info):
+    view = disnake.ui.View(timeout=None)
+    view.add_item(disnake.ui.Button(label="Открыть матч", emoji="🏆",
+                                   url=f"https://www.dotabuff.com/matches/{int(match_id)}"))
+    links = dict(get_all_steam_links(guild.id))
+    seen = set()
+    for player in players_info:
+        account = player.get("steam32")
+        if not player.get("linked") or not account or account in seen:
+            continue
+        uid = next((uid for uid, steam in links.items() if steam64_to_32(int(steam)) == int(account)), None)
+        member = guild.get_member(uid) if uid else None
+        if not member:
+            continue
+        seen.add(account)
+        view.add_item(disnake.ui.Button(label=member.display_name[:80], emoji="👤",
+                                       url=f"https://www.dotabuff.com/players/{int(account)}"))
+        if len(view.children) == 11:
+            break
+    return view
+
+
 async def match_card(embed, guild):
     from cogs.dota_card import render_card
     buffer = await asyncio.to_thread(render_card, embed, guild)
@@ -543,13 +565,13 @@ class Dota(commands.Cog):
                 if not is_live and match_data and match_data.get("duration"):
                     embed = build_finished_embed(match_id, players_info, match_data, heroes_list)
                     card, image = await match_card(embed, guild)
-                    await channel.send(embed=card, file=image)
+                    await channel.send(embed=card, file=image, view=match_links(guild, match_id, players_info))
                     live_messages[guild.id][match_id] = (None, players_info)
                     log.info(f"[{guild.name}] Матч #{match_id} уже завершён, показываем итоги")
                 else:
                     embed = build_live_embed(match_id, players_info, heroes_list)
                     card, image = await match_card(embed, guild)
-                    msg = await channel.send(embed=card, file=image)
+                    msg = await channel.send(embed=card, file=image, view=match_links(guild, match_id, players_info))
                     live_messages[guild.id][match_id] = (msg, players_info)
                     log.info(f"[{guild.name}] Новый матч #{match_id} обнаружен для {member}")
 
@@ -566,7 +588,7 @@ class Dota(commands.Cog):
                     finished_embed = build_finished_embed(match_id, players_info, match_data, heroes_list)
                     try:
                         card, image = await match_card(finished_embed, guild)
-                        await msg.edit(embed=card, attachments=[], file=image)
+                        await msg.edit(embed=card, attachments=[], file=image, view=match_links(guild, match_id, players_info))
                     except Exception:
                         pass
                     del live_messages[guild.id][match_id]
@@ -627,7 +649,7 @@ class Dota(commands.Cog):
                     live_embed = build_live_embed(match_id, players_info, heroes_list)
                     try:
                         card, image = await match_card(live_embed, guild)
-                        await msg.edit(embed=card, attachments=[], file=image)
+                        await msg.edit(embed=card, attachments=[], file=image, view=match_links(guild, match_id, players_info))
                     except Exception:
                         pass
 
