@@ -22,10 +22,12 @@ def constants(name):
 def icon(path):
     if not path:
         return None
+    if path.startswith("http://"):
+        path = "https://" + path[7:]
     if path.startswith("https://"):
         from urllib.parse import urlparse
         host = urlparse(path).hostname or ""
-        if not (host.endswith(".steamstatic.com") or host.endswith(".steamcdn-a.akamaihd.net")):
+        if not (host.endswith(".steamstatic.com") or host.endswith(".steamcdn-a.akamaihd.net") or host.endswith(".steamusercontent.com") or host == "avatars.akamai.steamstatic.com"):
             return None
         url = path
     else:

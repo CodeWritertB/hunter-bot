@@ -1,3 +1,4 @@
+from cogs.room_card import room_payload, update_room
 import time
 import disnake
 import logging
@@ -78,7 +79,7 @@ class NameSelect(disnake.ui.StringSelect):
         save_vc_settings(self.vc, self.owner.id, name=name)
         log.info(f"[{inter.guild.name}] Комната переименована в '{name}' ({inter.author})")
         if msg := panel_messages.get(self.vc.id):
-            await msg.edit(embed=build_panel_embed(self.vc, self.owner))
+            await update_room(msg, self.vc, self.owner)
         await inter.response.edit_message(content=f"✅ Название: **{name}**", view=None, embed=None)
 
 
@@ -106,7 +107,7 @@ class RenameModal(disnake.ui.Modal):
         save_vc_settings(self.vc, self.owner.id, name=name)
         log.info(f"[{inter.guild.name}] Комната переименована в '{name}' ({inter.author})")
         if msg := panel_messages.get(self.vc.id):
-            await msg.edit(embed=build_panel_embed(self.vc, self.owner))
+            await update_room(msg, self.vc, self.owner)
         await inter.response.send_message(f"✅ Название: **{name}**", ephemeral=True)
 
 
@@ -129,7 +130,7 @@ class LimitModal(disnake.ui.Modal):
         save_vc_settings(self.vc, self.owner.id)
         log.info(f"[{inter.guild.name}] Лимит '{self.vc.name}' → {count} ({inter.author})")
         if msg := panel_messages.get(self.vc.id):
-            await msg.edit(embed=build_panel_embed(self.vc, self.owner))
+            await update_room(msg, self.vc, self.owner)
         await inter.response.send_message(f"✅ Лимит: {count if count else '∞'}", ephemeral=True)
 
 
@@ -158,7 +159,7 @@ class VisibilityView(disnake.ui.View):
         save_vc_settings(self.vc, self.owner.id)
         log.info(f"[{inter.guild.name}] '{self.vc.name}' {'показана' if hidden else 'скрыта'} ({inter.author})")
         if msg := panel_messages.get(self.vc.id):
-            await msg.edit(embed=build_panel_embed(self.vc, self.owner))
+            await update_room(msg, self.vc, self.owner)
         status = "👁 Проявлена" if hidden else "🙈 Скрыта"
         await inter.response.edit_message(content=f"✅ {status}", view=None, embed=None)
 
@@ -191,7 +192,7 @@ class TransferSelect(disnake.ui.StringSelect):
         await self.vc.set_permissions(self.owner, overwrite=None)
         log.info(f"[{inter.guild.name}] Владелец '{self.vc.name}': {self.owner} → {new_owner}")
         if msg := panel_messages.get(self.vc.id):
-            await msg.edit(embed=build_panel_embed(self.vc, new_owner), view=RoomPanel(self.vc, new_owner))
+            await update_room(msg, self.vc, new_owner, view=RoomPanel(self.vc, new_owner))
         await inter.response.edit_message(content=f"✅ Владелец передан: {new_owner.mention}", view=None, embed=None)
 
 
@@ -240,6 +241,8 @@ class MemberActionSelect(disnake.ui.StringSelect):
             if target.voice and target.voice.channel == self.vc:
                 await target.move_to(None)
             await self.vc.set_permissions(target, connect=False, view_channel=False)
+            if msg := panel_messages.get(self.vc.id):
+                await update_room(msg, self.vc, self.owner)
             log.info(f"[{inter.guild.name}] {target} забанен в '{self.vc.name}' ({self.owner})")
             await inter.response.edit_message(content=f"🚫 {target.mention} забанен в комнате.", view=None, embed=None)
 
@@ -314,7 +317,7 @@ class RoomPanel(disnake.ui.View):
         status = "✅ Видео разрешено" if currently_denied else "🚫 Видео запрещено"
         log.info(f"[{inter.guild.name}] '{self.vc.name}' видео: {status} ({inter.author})")
         if msg := panel_messages.get(self.vc.id):
-            await msg.edit(embed=build_panel_embed(self.vc, self.owner))
+            await update_room(msg, self.vc, self.owner)
         await inter.response.send_message(status, ephemeral=True)
 
     @disnake.ui.button(label="Voice", emoji="🎤", style=disnake.ButtonStyle.secondary, custom_id="room_voice", row=1)
@@ -330,7 +333,7 @@ class RoomPanel(disnake.ui.View):
         status = "✅ Голос разрешён" if currently_denied else "🚫 Голос запрещён"
         log.info(f"[{inter.guild.name}] '{self.vc.name}' голос: {status} ({inter.author})")
         if msg := panel_messages.get(self.vc.id):
-            await msg.edit(embed=build_panel_embed(self.vc, self.owner))
+            await update_room(msg, self.vc, self.owner)
         await inter.response.send_message(status, ephemeral=True)
 
     @disnake.ui.button(label="Баны", emoji="🔨", style=disnake.ButtonStyle.danger, custom_id="room_ban", row=1)
@@ -393,6 +396,7 @@ class VoiceRooms(commands.Cog):
                 if vc and owner:
                     try:
                         msg = await vc.fetch_message(message_id)
+                        await update_room(msg, vc, owner, view=RoomPanel(vc, owner))
                         panel_messages[channel_id] = msg
                         self.bot.add_view(RoomPanel(vc, owner), message_id=message_id)
                     except Exception:
@@ -443,7 +447,7 @@ class VoiceRooms(commands.Cog):
 
         # Обновляем панель
         if msg := panel_messages.get(channel.id):
-            await msg.edit(embed=build_panel_embed(channel, inter.author), view=RoomPanel(channel, inter.author))
+            await update_room(msg, channel, inter.author, view=RoomPanel(channel, inter.author))
 
         log.info(f"[{inter.guild.name}] Админ {inter.author} забрал управление комнатой '{channel.name}' у {old_owner}")
         await inter.response.send_message(f"✅ Управление комнатой **{channel.name}** передано вам.", ephemeral=True)
@@ -484,7 +488,8 @@ class VoiceRooms(commands.Cog):
 
             await member.move_to(vc)
             add_temp_channel(vc.id, guild.id, member.id)
-            msg = await vc.send(embed=build_panel_embed(vc, member), view=RoomPanel(vc, member))
+            embed, file = await room_payload(vc, member)
+            msg = await vc.send(embed=embed, file=file, view=RoomPanel(vc, member))
             panel_messages[vc.id] = msg
             save_panel_message(vc.id, guild.id, msg.id)
             log.info(f"[{guild.name}] Создана комната: {vc.name} для {member}")
@@ -515,7 +520,7 @@ class VoiceRooms(commands.Cog):
                     await vc.set_permissions(new_owner, manage_channels=True, move_members=True, mute_members=True)
                     await vc.set_permissions(member, overwrite=None)
                     if msg := panel_messages.get(vc.id):
-                        await msg.edit(embed=build_panel_embed(vc, new_owner), view=RoomPanel(vc, new_owner))
+                        await update_room(msg, vc, new_owner, view=RoomPanel(vc, new_owner))
                     log.info(f"[{guild.name}] Владелец '{vc.name}' передан: {new_owner}")
 
 

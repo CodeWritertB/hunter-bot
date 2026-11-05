@@ -383,6 +383,7 @@ async def match_card(embed, guild, match_data=None, players_info=None):
             account = player.get("account_id", player.get("steam32"))
             profile = profiles.get(str(int(account) + 76561197960265728), {}) if account else {}
             player["steam_avatar"] = profile.get("avatarmedium") or profile.get("avatarfull")
+            player["personaname"] = profile.get("personaname") or player.get("personaname")
     except (aiohttp.ClientError, TimeoutError, ValueError):
         log.warning("Steam-аватары временно недоступны")
     enriched_match = dict(match_data, players=enriched) if match_data else None
@@ -477,11 +478,14 @@ class Dota(commands.Cog):
                 if match_id in live_messages.get(guild.id, {}) or is_match_processed(guild.id, match_id):
                     continue
 
-                mark_match_processed(guild.id, match_id)
+
 
                 # Пробуем получить детали из OpenDota (может ещё не быть если матч только начался)
                 match_data = await get_match_details(session, match_id)
                 match_players = match_data.get("players", []) if match_data else []
+                if not match_data or not match_data.get("duration") or len(match_players) < 10:
+                    active_matches[guild.id].pop(steam32, None)
+                    continue
                 is_live = not match_data or not match_data.get("duration")
 
                 # Счёт убийств из данных матча
@@ -582,6 +586,7 @@ class Dota(commands.Cog):
                     embed = build_finished_embed(match_id, players_info, match_data, heroes_list)
                     card, image = await match_card(embed, guild, match_data if not is_live else None, players_info)
                     await channel.send(embed=card, file=image, view=match_links(guild, match_id, players_info))
+                    mark_match_processed(guild.id, match_id)
                     live_messages[guild.id][match_id] = (None, players_info)
                     log.info(f"[{guild.name}] Матч #{match_id} уже завершён, показываем итоги")
                 else:
