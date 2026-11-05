@@ -67,6 +67,9 @@ class ActionButton(disnake.ui.Button):
                          style=disnake.ButtonStyle.primary if primary else disnake.ButtonStyle.secondary)
 
     async def callback(self, inter):
+        if self.action == "valve_history":
+            from cogs.cs_history import show_help
+            return await show_help(inter)
         if self.action == "link":
             return await inter.response.send_modal(LinkModal(self.game))
         await invoke(inter, self.game, self.action)
@@ -80,3 +83,6 @@ class GameMenu(disnake.ui.View):
         if game == "dota":
             self.add_item(ActionButton(game, "dota_matches", "Последние матчи", "⚔️"))
             self.add_item(ActionButton(game, "dota_week", "Неделя сервера", "🏆"))
+
+        if game == "cs2":
+            self.add_item(ActionButton(game, "valve_history", "Матчи CS2 / Premier", "🎟️"))

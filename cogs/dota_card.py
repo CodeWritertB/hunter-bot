@@ -98,7 +98,7 @@ def render_card(embed, guild, match_data=None, players_info=None, public_profile
     image = image.convert("RGB")
     draw = ImageDraw.Draw(image)
     def font(size):
-        return ImageFont.truetype(str(FONT), size)
+        return ImageFont.truetype(str(FONT.parent / "Spectral-SemiBold.ttf" if size >= 25 else FONT), size)
     def clean(text):
         def member(match):
             user = guild.get_member(int(match.group(1))) if guild else None

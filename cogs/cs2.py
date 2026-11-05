@@ -200,6 +200,17 @@ def build_cs_finished_embed(match_id: str, players_info: list, match_data: dict 
     return embed
 
 
+async def cs_match_card(embed, guild, match_data, players_info):
+    from cogs.cs_card import render_cs_card
+    buffer = await asyncio.to_thread(render_cs_card, embed, guild, match_data, players_info)
+    card = disnake.Embed(color=embed.color)
+    card.set_image(url="attachment://cs2-match.png")
+    view = disnake.ui.View(timeout=None)
+    if embed.url:
+        view.add_item(disnake.ui.Button(label="Открыть матч FACEIT", url=embed.url))
+    return card, disnake.File(buffer, filename="cs2-match.png"), view
+
+
 class CS2(commands.Cog):
     def __init__(self, bot: commands.InteractionBot):
         self.bot = bot
@@ -214,6 +225,8 @@ class CS2(commands.Cog):
         await self.bot.wait_until_ready()
         while not self.bot.is_closed():
             try:
+                from cogs.cs_history import poll_history
+                await poll_history(self.bot)
                 if FACEIT_API_KEY:
                     await self.check_all_guilds()
             except Exception as e:
@@ -329,7 +342,8 @@ class CS2(commands.Cog):
                             players_info.append({"mention": "Anonymous", "faceit_id": None, "linked": False})
 
                 embed = build_cs_live_embed(match_id, players_info, match_data)
-                msg = await channel.send(embed=embed)
+                card, image, view = await cs_match_card(embed, guild, match_data, players_info)
+                msg = await channel.send(embed=card, file=image, view=view)
                 live_cs_messages[guild.id][match_id] = (msg, players_info)
                 log.info(f"[{guild.name}] CS2 матч {match_id} обнаружен")
 
@@ -337,9 +351,20 @@ class CS2(commands.Cog):
                 msg, players_info = live_cs_messages[guild.id][match_id]
                 match_data = await get_faceit_match_details(session, match_id)
                 if match_data and match_data.get("status") == "FINISHED":
+                    async with session.get(f"{FACEIT_API}/matches/{match_id}/stats", headers=faceit_headers()) as stats_response:
+                        if stats_response.status == 200:
+                            payload = await stats_response.json()
+                            for round_data in payload.get("rounds", []):
+                                for team in round_data.get("teams", []):
+                                    for entry in team.get("players", []):
+                                        for faction in match_data.get("teams", {}).values():
+                                            for player in faction.get("roster", []):
+                                                if player.get("player_id") == entry.get("player_id"):
+                                                    player["_match_stats"] = entry.get("player_stats", {})
                     finished = build_cs_finished_embed(match_id, players_info, match_data)
                     try:
-                        await msg.edit(embed=finished)
+                        card, image, view = await cs_match_card(finished, guild, match_data, players_info)
+                        await msg.edit(embed=card, attachments=[], file=image, view=view)
                     except Exception:
                         pass
                     del live_cs_messages[guild.id][match_id]
@@ -347,7 +372,8 @@ class CS2(commands.Cog):
                 else:
                     live_embed = build_cs_live_embed(match_id, players_info, match_data)
                     try:
-                        await msg.edit(embed=live_embed)
+                        card, image, view = await cs_match_card(live_embed, guild, match_data, players_info)
+                        await msg.edit(embed=card, attachments=[], file=image, view=view)
                     except Exception:
                         pass
 
