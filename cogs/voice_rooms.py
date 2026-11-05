@@ -379,6 +379,17 @@ class RoomPanel(disnake.ui.View):
 
 # --- Cog ---
 
+def room_history_overwrites(guild, overwrites):
+    overwrites = dict(overwrites)
+    everyone = overwrites.get(guild.default_role, disnake.PermissionOverwrite())
+    everyone.read_message_history = True
+    overwrites[guild.default_role] = everyone
+    for overwrite in overwrites.values():
+        if overwrite.read_message_history is False:
+            overwrite.read_message_history = True
+    return overwrites
+
+
 class VoiceRooms(commands.Cog):
     def __init__(self, bot: commands.InteractionBot):
         self.bot = bot
@@ -389,6 +400,15 @@ class VoiceRooms(commands.Cog):
         from db.database import get_all_temp_channels
         for guild in self.bot.guilds:
             owners = dict(get_all_temp_channels(guild.id))
+            for channel_id in owners:
+                room = guild.get_channel(channel_id)
+                if room:
+                    overwrites = room_history_overwrites(guild, room.overwrites)
+                    if overwrites != room.overwrites:
+                        try:
+                            await room.edit(overwrites=overwrites, reason="Доступ к истории сообщений временной комнаты")
+                        except disnake.HTTPException:
+                            log.exception("Не удалось исправить историю сообщений комнаты %s", channel_id)
             # Восстанавливаем panel_messages из БД
             for channel_id, message_id in get_all_panel_messages(guild.id):
                 vc = guild.get_channel(channel_id)
@@ -466,9 +486,9 @@ class VoiceRooms(commands.Cog):
             name = settings[0] if settings else f"🔊 {member.display_name}"
             user_limit = settings[1] if settings else 0
 
-            overwrites = dict(category.overwrites) if category else {}
+            overwrites = room_history_overwrites(guild, category.overwrites if category else {})
             owner_overwrite = overwrites.get(member, disnake.PermissionOverwrite())
-            owner_overwrite.update(view_channel=True, connect=True, manage_channels=True, move_members=True, mute_members=True)
+            owner_overwrite.update(view_channel=True, connect=True, read_message_history=True, manage_channels=True, move_members=True, mute_members=True)
             overwrites[member] = owner_overwrite
             vc = await guild.create_voice_channel(
                 name=name,
