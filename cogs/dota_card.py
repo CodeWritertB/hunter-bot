@@ -266,7 +266,7 @@ def render_card(embed, guild, match_data=None, players_info=None, public_profile
                 x = left + 430 + slot * 64
                 paste(items.get(player.get("backpack_" + str(slot)), {}).get("img"),
                       (x, y + 156, x + 56, y + 190))
-    label("Шард · Благословение Аганима · Мун Шард — цветные при поглощении, серые без подтверждения",
+    label("Hunter Bot",
           (56, 1540), 17, "#c6b797", 1320)
     output = io.BytesIO()
     image.save(output, format="PNG", optimize=True)
