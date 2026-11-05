@@ -7,7 +7,7 @@ import urllib.request
 from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageOps, ImageEnhance
 
 FONT = Path(__file__).resolve().parent.parent / "assets" / "NotoSans-Regular.ttf"
 
@@ -35,15 +35,20 @@ def load_assets(players):
         items = {int(value["id"]): value for value in constants("items").values() if "id" in value}
     except Exception:
         return {}, {}, {}
-    paths = set()
+    paths = {items[key]["img"] for key in items if items[key].get("img") and
+             items[key].get("dname") in {"Aghanim's Shard", "Aghanim's Blessing", "Moon Shard"}}
     for player in players:
         hero = heroes.get(str(player.get("hero_id", 0)), {})
         if hero.get("img"):
             paths.add(hero["img"])
-        for index in range(10):
-            item = items.get(player.get("item_" + str(index), 0), {})
+        for index in range(9):
+            key = "item_" + str(index) if index < 6 else "backpack_" + str(index - 6)
+            item = items.get(player.get(key, 0), {})
             if item.get("img"):
                 paths.add(item["img"])
+        neutral = items.get(player.get("item_neutral"), {})
+        if neutral.get("img"):
+            paths.add(neutral["img"])
     with ThreadPoolExecutor(max_workers=8) as pool:
         pictures = dict(zip(paths, pool.map(icon, paths)))
     return heroes, items, pictures
@@ -68,7 +73,7 @@ def render_card(embed, guild, match_data=None, players_info=None):
             pixels[x, y] = (int(10 + 57 * red + 27 * gold),
                             int(15 + 29 * green + 12 * gold),
                             int(13 + 15 * green + 8 * red))
-    image = backdrop.resize((1440, 1160), Image.Resampling.BICUBIC).convert("RGBA")
+    image = backdrop.resize((1440, 1600), Image.Resampling.BICUBIC).convert("RGBA")
     if winner is not None:
         glow = Image.new("RGBA", image.size)
         painter = ImageDraw.Draw(glow)
@@ -141,11 +146,14 @@ def render_card(embed, guild, match_data=None, players_info=None):
     players = (match_data or {}).get("players") or players_info or []
     heroes, items, pictures = load_assets(players)
     top = 422
-    def paste(path, box):
+    def paste(path, box, active=True):
         picture = pictures.get(path)
         if picture is not None:
             from PIL import ImageOps
-            image.paste(ImageOps.fit(picture, (box[2] - box[0], box[3] - box[1])), box[:2])
+            tile = ImageOps.fit(picture, (box[2] - box[0], box[3] - box[1]))
+            if not active:
+                tile = ImageEnhance.Brightness(ImageOps.grayscale(tile).convert("RGB")).enhance(0.45)
+            image.paste(tile, box[:2])
         else:
             draw.rounded_rectangle(box, 5, fill="#29302d")
     for side, field in enumerate(teams[:2]):
@@ -156,38 +164,48 @@ def render_card(embed, guild, match_data=None, players_info=None):
         if not team_players:
             label("Подробности игроков пока недоступны", (left + 18, top + 30), 19)
         for index, player in enumerate(team_players[:5]):
-            y = top + 20 + index * 126
-            draw.rounded_rectangle((left, y, left + 642, y + 116), 12, fill="#151d1a" if side == 0 else "#201a19")
+            y = top + 20 + index * 214
+            draw.rounded_rectangle((left, y, left + 642, y + 202), 12, fill="#151d1a" if side == 0 else "#201a19")
             hero = heroes.get(str(player.get("hero_id", 0)), {})
-            paste(hero.get("img"), (left + 12, y + 12, left + 98, y + 62))
+            paste(hero.get("img"), (left + 14, y + 18, left + 100, y + 70))
             account = player.get("account_id", player.get("steam32"))
             linked = next((entry for entry in (players_info or []) if account and entry.get("steam32") == account and entry.get("linked")), None)
             name = (linked or player).get("mention") or player.get("personaname") or hero.get("localized_name", "Игрок")
-            label(name, (left + 110, y + 7), 20, "#fff0d9", 510)
-            label(hero.get("localized_name", "Герой") + "  ·  " +
-                  "/".join(str(player.get(key, "—")) for key in ("kills", "deaths", "assists")),
-                  (left + 110, y + 37), 15, "#bfb6a4", 510)
-            if "gold_per_min" in player:
-                label(f"Золото/мин {player.get('gold_per_min', '—')} · Опыт/мин {player.get('xp_per_min', '—')} · Урон {player.get('hero_damage', '—')}",
-                      (left + 110, y + 57), 11, "#a9a697", 510)
-            if player.get("item_neutral"):
-                paste(items.get(player["item_neutral"], {}).get("img"), (left + 12, y + 72, left + 56, y + 104))
-            for slot in range(6):
-                item_id = player.get("item_" + str(slot))
-                box = (left + 110 + slot * 48, y + 72, left + 154 + slot * 48, y + 104)
-                paste(items.get(item_id, {}).get("img"), box)
+            label(name, (left + 112, y + 12), 22, "#fff0d9", 286)
+            label(hero.get("localized_name", "Герой"), (left + 112, y + 45), 16, "#c5bba7", 286)
+            label("У / С / П   " + " / ".join(str(player.get(key, "—")) for key in ("kills", "deaths", "assists")),
+                  (left + 112, y + 75), 18, "#f6d39b", 286)
+            stats = [("Ценность", "net_worth"), ("Золото/мин", "gold_per_min"),
+                     ("Опыт/мин", "xp_per_min"), ("Добивания", "last_hits"), ("Урон героям", "hero_damage")]
+            for number, (caption, key) in enumerate(stats):
+                value = player.get(key)
+                value = f"{value:,}".replace(",", " ") if isinstance(value, (int, float)) else "—"
+                label(caption + "   " + value, (left + 112, y + 106 + number * 17), 13, "#c2c2b4", 292)
+            paste(items.get(player.get("item_neutral"), {}).get("img"),
+                  (left + 22, y + 110, left + 86, y + 156))
+            label("Нейтр.", (left + 22, y + 164), 12, "#a9a697", 80)
             buffs = {entry.get("permanent_buff"): entry.get("stack_count", 1) for entry in player.get("permanent_buffs", [])}
-            upgrades = [("Ш", player.get("aghanims_shard") or buffs.get(12)),
-                        ("А", buffs.get(2) or (player.get("aghanims_scepter") and 108 not in [player.get("item_" + str(slot)) for slot in range(6)])),
-                        ("Л", player.get("moonshard") or buffs.get(1))]
-            for number, (short, present) in enumerate(upgrades):
-                x = left + 420 + number * 58
-                draw.rounded_rectangle((x, y + 73, x + 48, y + 103), 8,
-                                       fill="#64431e" if present else "#222522",
-                                       outline="#f6c574" if present else "#41443b")
-                label(short if present else "—", (x + 16, y + 77), 16, "#ffe1a4" if present else "#777d72", 32)
-    label("Ш — Шард   ·   А — поглощённый Аганим   ·   Л — поглощённый Мун Шард",
-          (56, 1090), 17, "#c6b797", 1320)
+            owned_scepter = any(items.get(player.get("item_" + str(slot)), {}).get("dname") == "Aghanim's Scepter" for slot in range(6))
+            upgrades = [("Aghanim's Shard", player.get("aghanims_shard") or buffs.get(12)),
+                        ("Aghanim's Blessing", buffs.get(2) or (player.get("aghanims_scepter") and not owned_scepter)),
+                        ("Moon Shard", player.get("moonshard") or buffs.get(1))]
+            for number, (name, active) in enumerate(upgrades):
+                item = next((item for item in items.values() if item.get("dname") == name), {})
+                x = left + 430 + number * 64
+                paste(item.get("img"), (x, y + 12, x + 56, y + 51), bool(active))
+                draw.rectangle((x, y + 12, x + 56, y + 51), outline="#ffc86d" if active else "#4a4c45", width=1)
+            for slot in range(6):
+                x = left + 430 + slot % 3 * 64
+                item_y = y + 62 + slot // 3 * 40
+                paste(items.get(player.get("item_" + str(slot)), {}).get("img"),
+                      (x, item_y, x + 56, item_y + 36))
+            draw.line((left + 430, y + 147, left + 614, y + 147), fill="#494333", width=1)
+            for slot in range(3):
+                x = left + 430 + slot * 64
+                paste(items.get(player.get("backpack_" + str(slot)), {}).get("img"),
+                      (x, y + 156, x + 56, y + 190))
+    label("Шард · Благословение Аганима · Мун Шард — цветные при поглощении, серые без подтверждения",
+          (56, 1540), 17, "#c6b797", 1320)
     output = io.BytesIO()
     image.save(output, format="PNG", optimize=True)
     output.seek(0)
