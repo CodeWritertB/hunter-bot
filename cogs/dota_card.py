@@ -98,7 +98,7 @@ def render_card(embed, guild, match_data=None, players_info=None, public_profile
     image = image.convert("RGB")
     draw = ImageDraw.Draw(image)
     def font(size):
-        return ImageFont.truetype(str(FONT.parent / "Spectral-SemiBold.ttf" if size >= 25 else FONT), size)
+        return ImageFont.truetype(str(FONT.parent / "Spectral-Bold.ttf" if size >= 25 else FONT), size)
     def clean(text):
         def member(match):
             user = guild.get_member(int(match.group(1))) if guild else None
@@ -147,8 +147,8 @@ def render_card(embed, guild, match_data=None, players_info=None, public_profile
     for side, team in enumerate(teams[:2]):
         center = 300 if side == 0 else 1140
         accent = "#71df83" if side == 0 else "#ff7770"
-        name = re.sub(r"\s*\[.*?\]", "", clean(team.name))
-        centered(name.upper(), center, 126, 33, accent, 430)
+        name = "СВЕТ" if side == 0 else "ТЬМА"
+        centered(name, center, 113, 52, accent, 430)
         score = scores[side] if len(scores) == 2 else None
         if score is None:
             live_score = re.search(r"\[(\d+)\]", team.name)
@@ -156,8 +156,8 @@ def render_card(embed, guild, match_data=None, players_info=None, public_profile
         centered(score, center, 175, 98, "#ffd18a" if winner == side else "#faf1de", 430)
         centered("УБИЙСТВ", center, 300, 16, "#ccb99e", 430)
         if winner == side:
-            draw.rounded_rectangle((center - 115, 346, center + 115, 383), 12, fill="#9e551e", outline="#ffc56e", width=2)
-            centered("ПОБЕДА", center, 352, 19, "#fff0c5", 220)
+            draw.polygon([(center-138,350),(center-120,340),(center+120,340),(center+138,350),(center+138,382),(center+120,392),(center-120,392),(center-138,382)], fill="#b97125", outline="#ffd18a", width=2)
+            centered("ПОБЕДА", center, 342, 29, "#fff1c8", 250)
     players = (match_data or {}).get("players") or players_info or []
     heroes, items, pictures = load_assets(players)
     top = 422

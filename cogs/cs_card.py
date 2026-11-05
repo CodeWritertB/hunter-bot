@@ -1,66 +1,106 @@
 import io
 import re
-from PIL import Image, ImageDraw, ImageFont
+import urllib.request
+from functools import lru_cache
+from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageEnhance
 from pathlib import Path
 
 FONT = Path(__file__).resolve().parent.parent / "assets" / "NotoSans-Regular.ttf"
 
 
+@lru_cache(maxsize=128)
+def remote_image(url):
+    try:
+        with urllib.request.urlopen(url, timeout=5) as response:
+            return Image.open(io.BytesIO(response.read(5000000))).convert("RGB")
+    except Exception:
+        return None
+
+
 def render_cs_card(embed, guild, match_data=None, players_info=None):
     data = match_data or {}
-    image = Image.new("RGB", (1440, 1060))
-    draw = ImageDraw.Draw(image)
-    for y in range(1060):
-        draw.line((0, y, 1440, y), fill=(20 + int(15 * (1-y/1060)), 23 + int(8*y/1060), 29))
-    def text(value, xy, size=22, color="#e7e8e9", width=1200):
-        def mention(match):
-            member = guild.get_member(int(match.group(1))) if guild else None
-            return member.display_name if member else "Участник"
-        value = re.sub(r"<@!?(\d+)>", mention, str(value))
-        value = re.sub(r"\[([^]]+)\]\([^)]+\)", r"\1", value).replace("**", "")
-        face = ImageFont.truetype(str(FONT), size)
-        while value and draw.textlength(value, font=face) > width:
-            value = value[:-1]
-        draw.text(xy, value, font=face, fill=color)
-    draw.rectangle((0,0,1440,7),fill="#f7a928")
-    text("HUNTER BOT  /  COUNTER-STRIKE 2", (56,38),20,"#d5ae6b")
-    text("CS2", (52,83),80,"#faf4e6")
-    finished = data.get("status") == "FINISHED"
-    text("НОВЫЙ МАТЧ VALVE" if data.get("source") == "valve" else "МАТЧ ЗАВЕРШЁН" if finished else "МАТЧ ИДЁТ", (900,118),27,"#f2bd68",480)
-    result = data.get("results", {})
-    score = result.get("score", {})
-    text(str(score.get("faction1", "—")), (475,193),80,"#edb258")
-    text("VS", (675,225),36,"#bfc7d1")
-    text(str(score.get("faction2", "—")), (855,193),80,"#86b3e4")
     maps = data.get("voting", {}).get("map", {}).get("pick", [])
-    text(("VALVE  ·  История матчей" if data.get("source") == "valve" else "FACEIT  ·  " + (", ".join(maps) if maps else "Карта уточняется")), (56,315),23)
-    teams = data.get("teams", {})
-    for side, faction in enumerate(("faction1","faction2")):
-        x = 56 + side*670
-        team = teams.get(faction, {})
-        accent = "#f4b85d" if side==0 else "#8cb9ed"
-        text(team.get("name", "Команда " + str(side+1)),(x,375),28,accent,620)
+    map_name = data.get("_stats_map") or (maps[0] if maps else "")
+    background = None
+    if re.fullmatch(r"[a-z0-9_]+", map_name):
+        background = remote_image("https://raw.githubusercontent.com/MurkyYT/cs2-map-icons/main/images/thumbs/" + map_name + "_png.png")
+    image = Image.new("RGB", (1440, 1160), "#15191e")
+    if background:
+        image = ImageEnhance.Brightness(ImageOps.fit(background, image.size)).enhance(0.28)
+    draw = ImageDraw.Draw(image)
+    def clean(value):
+        def member(match):
+            user = guild.get_member(int(match.group(1))) if guild else None
+            return user.display_name if user else "Участник"
+        value = re.sub(r"<@!?(\d+)>", member, str(value))
+        return re.sub(r"\[([^]]+)\]\([^)]+\)", r"\1", value).replace("**","")
+    def text(value, xy, size=22, color="#e7e8e9", width=1200, center=False):
+        value = clean(value)
+        face = ImageFont.truetype(str(FONT), size)
+        while value and draw.textlength(value,font=face)>width:
+            value=value[:-1]
+        x,y=xy
+        if center:
+            x-=draw.textlength(value,font=face)/2
+        draw.text((x,y),value,font=face,fill=color)
+    teams=data.get("teams",{})
+    result=data.get("results",{})
+    score=result.get("score",{})
+    status=data.get("status","")
+    status_text={"FINISHED":"МАТЧ ЗАВЕРШЁН","CANCELLED":"МАТЧ ОТМЕНЁН","ONGOING":"МАТЧ ИДЁТ","READY":"МАТЧ ГОТОВ","CONFIGURING":"ПОДГОТОВКА"}.get(status,"ОЖИДАНИЕ МАТЧА")
+    if data.get("source")=="valve":
+        status_text="НОВЫЙ МАТЧ VALVE"
+    text("HUNTER BOT / CS2",(56,35),20,"#dfbd86")
+    text(("VALVE" if data.get("source")=="valve" else "FACEIT")+"  ·  "+(map_name.removeprefix("de_").upper() or "КАРТА УТОЧНЯЕТСЯ"),(720,82),25,"#f3ddba",center=True)
+    text(status_text,(720,126),23,"#ffd184",center=True)
+    text("VS",(720,198),56,"#f4dfbd",center=True)
+    text(data.get("_duration",""),(720,279),21,"#d7d4c9",center=True)
+    ordered=list(teams.items())[:2]
+    # CT/T are only displayed if the source explicitly identifies the team's side.
+    for side,(faction,team) in enumerate(ordered):
+        center=300 if side==0 else 1140
+        accent="#8fbef5" if side==0 else "#f4bf6b"
+        current_side=str(team.get("side","")).lower()
+        title={"ct":"СПЕЦНАЗ","counter-terrorist":"СПЕЦНАЗ","t":"ТЕРРОРИСТЫ","terrorist":"ТЕРРОРИСТЫ"}.get(current_side,team.get("name","Команда "+str(side+1)))
+        text(title,(center,132),32,accent,430,True)
+        text(score.get(faction,"—"),(center,184),88,"#ffe0a2" if result.get("winner")==faction else "#fff6e6",430,True)
         if result.get("winner")==faction:
-            text("ПОБЕДА",(x+460,384),18,"#f7d38a",160)
-        roster = team.get("roster", [])
-        for index, player in enumerate(roster[:5]):
-            y=438+index*105
-            draw.rounded_rectangle((x,y,x+642,y+94),12,fill="#242a32")
-            info=next((p for p in players_info or [] if p.get("faceit_id")==player.get("player_id")),{})
-            text(info.get("mention") or player.get("nickname","Игрок"),(x+20,y+12),23,width=600)
+            draw.rounded_rectangle((center-125,313,center+125,360),12,fill="#ac6b26",outline="#ffd28c",width=2)
+            text("ПОБЕДА",(center,318),25,"#fff0ca",240,True)
+        x=56+side*670
+        for index,player in enumerate(team.get("roster",[])[:5]):
+            y=402+index*135
+            draw.rounded_rectangle((x,y,x+642,y+123),14,fill="#171d23")
+            info=next((entry for entry in players_info or [] if entry.get("faceit_id")==player.get("player_id")),{})
+            server=bool(info.get("linked"))
+            faceit=bool(player.get("player_id"))
+            border="#67df92" if server else "#ed9e45" if faceit else "#596169"
+            avatar=remote_image(player["_steam_avatar"]) if player.get("_steam_avatar") else None
+            box=(x+15,y+17,x+95,y+97)
+            mask=Image.new("L",(80,80))
+            ImageDraw.Draw(mask).rounded_rectangle((0,0,79,79),10,fill=255)
+            if avatar:
+                image.paste(ImageOps.fit(avatar,(80,80)),box[:2],mask)
+            else:
+                draw.rounded_rectangle(box,10,fill="#303943")
+            draw.rounded_rectangle((x+13,y+15,x+97,y+99),12,outline=border,width=2)
+            if server and faceit:
+                draw.rounded_rectangle((x+9,y+11,x+101,y+103),15,outline="#ed9e45",width=2)
+            text(info.get("mention") or player.get("nickname","Игрок"),(x+115,y+10),24,border,500)
+            text("FACEIT · ELO "+str(info.get("elo","—"))+" · Уровень "+str(info.get("level","—")),(x+115,y+48),16,"#eac898",505)
             stats=player.get("_match_stats",{})
             if stats:
-                line="У/С/П  " + "/".join(str(stats.get(key,"—")) for key in ("Kills","Deaths","Assists"))
-                line+="  ·  Урон/раунд " + str(stats.get("ADR","—")) + "  ·  HS " + str(stats.get("Headshots %","—"))+"%"
+                line="У/С/П "+" / ".join(str(stats.get(key,"—")) for key in ("Kills","Deaths","Assists"))
+                text(line,(x+115,y+73),17,"#eff1f2",500)
+                text("Урон/раунд "+str(stats.get("ADR","—"))+" · HS "+str(stats.get("Headshots %","—"))+"%",(x+115,y+98),14,"#b1bdcc",500)
             else:
-                line="Профиль · ELO "+str(info.get("elo","—"))+" · K/D "+str(info.get("kd","—"))+" · HS "+str(info.get("hs","—"))+"%"
-            text(line,(x+20,y+53),16,"#b8c1cc",600)
+                text("Профиль · K/D "+str(info.get("kd","—"))+" · HS "+str(info.get("hs","—"))+"%",(x+115,y+77),16,"#b1bdcc",500)
     if not teams:
-        text(embed.title,(56,440),28,width=1300)
+        text(embed.title,(56,420),28,width=1300)
         for index,field in enumerate(embed.fields[:4]):
-            text(field.name+"  "+field.value,(56,510+index*55),20,width=1300)
-    text("Hunter Bot",(56,1008),18,"#84909d")
+            text(field.name+" "+field.value,(56,490+index*55),20,width=1300)
+    text("Hunter Bot",(56,1110),18,"#b1b2a9")
     output=io.BytesIO()
-    image.save(output,format="PNG")
+    image.save(output,format="PNG",optimize=True)
     output.seek(0)
     return output

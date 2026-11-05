@@ -202,6 +202,29 @@ def build_cs_finished_embed(match_id: str, players_info: list, match_data: dict 
 
 async def cs_match_card(embed, guild, match_data, players_info):
     from cogs.cs_card import render_cs_card
+    import copy
+    match_data = copy.deepcopy(match_data or {})
+    start = match_data.get("started_at")
+    finish = match_data.get("finished_at")
+    if isinstance(start, (int, float)) and isinstance(finish, (int, float)) and finish >= start:
+        duration = int(finish - start)
+        match_data["_duration"] = f"{duration // 60} мин {duration % 60:02d} сек"
+    roster = [player for team in match_data.get("teams", {}).values() for player in team.get("roster", [])]
+    steam_ids = []
+    for player in roster:
+        steam = str(player.get("game_player_id", ""))
+        if steam.isdigit() and len(steam) == 17:
+            steam_ids.append(steam)
+    if steam_ids and STEAM_API_KEY:
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as session:
+                async with session.get(f"{STEAM_API}/ISteamUser/GetPlayerSummaries/v2/", params={"key": STEAM_API_KEY, "steamids": ",".join(steam_ids)}) as response:
+                    if response.status == 200:
+                        profiles = {profile["steamid"]: profile for profile in (await response.json()).get("response", {}).get("players", [])}
+                        for player in roster:
+                            player["_steam_avatar"] = profiles.get(str(player.get("game_player_id", "")), {}).get("avatarmedium")
+        except (aiohttp.ClientError, TimeoutError):
+            log.warning("Не удалось получить Steam-аватары CS2")
     buffer = await asyncio.to_thread(render_cs_card, embed, guild, match_data, players_info)
     card = disnake.Embed(color=embed.color)
     card.set_image(url="attachment://cs2-match.png")
@@ -355,6 +378,7 @@ class CS2(commands.Cog):
                         if stats_response.status == 200:
                             payload = await stats_response.json()
                             for round_data in payload.get("rounds", []):
+                                match_data["_stats_map"] = round_data.get("round_stats", {}).get("Map")
                                 for team in round_data.get("teams", []):
                                     for entry in team.get("players", []):
                                         for faction in match_data.get("teams", {}).values():
