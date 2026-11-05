@@ -54,7 +54,18 @@ def render_cs_card(embed, guild, match_data=None, players_info=None):
     text(("VALVE" if data.get("source")=="valve" else "FACEIT")+"  ·  "+(map_name.removeprefix("de_").upper() or "КАРТА УТОЧНЯЕТСЯ"),(720,82),25,"#f3ddba",center=True)
     text(status_text,(720,126),23,"#ffd184",center=True)
     text("VS",(720,198),56,"#f4dfbd",center=True)
-    text(data.get("_duration",""),(720,279),21,"#d7d4c9",center=True)
+    duration = data.get("_duration")
+    if not duration:
+        try:
+            seconds = max(0, int(float(data["finished_at"])) - int(float(data["started_at"])))
+            duration = f"{seconds // 60} мин {seconds % 60:02d} сек"
+        except (KeyError, TypeError, ValueError, OverflowError):
+            duration = None
+    if status == "FINISHED":
+        text("ДЛИТЕЛЬНОСТЬ МАТЧА",(720,276),13,"#c6bda9",300,True)
+        text(duration or "Нет данных",(720,300),23,"#fff0cf",320,True)
+    elif duration:
+        text(duration,(720,285),22,"#d7d4c9",320,True)
     ordered=list(teams.items())[:2]
     # CT/T are only displayed if the source explicitly identifies the team's side.
     for side,(faction,team) in enumerate(ordered):
@@ -86,15 +97,30 @@ def render_cs_card(embed, guild, match_data=None, players_info=None):
             draw.rounded_rectangle((x+13,y+15,x+97,y+99),12,outline=border,width=2)
             if server and faceit:
                 draw.rounded_rectangle((x+9,y+11,x+101,y+103),15,outline="#ed9e45",width=2)
-            text(info.get("mention") or player.get("nickname","Игрок"),(x+115,y+10),24,border,500)
-            text("FACEIT · ELO "+str(info.get("elo","—"))+" · Уровень "+str(info.get("level","—")),(x+115,y+48),16,"#eac898",505)
+            text(info.get("mention") or player.get("nickname","Игрок"),(x+115,y+14),22,border,250)
+            draw.rounded_rectangle((x+115,y+57,x+355,y+95),8,fill="#292b2b")
+            text("ELO",(x+128,y+66),12,"#c2b59d",40)
+            text(info.get("elo","—"),(x+167,y+61),20,"#f3cf94",82)
+            text("УР.",(x+253,y+66),12,"#c2b59d",32)
+            text(info.get("level","—"),(x+290,y+61),20,"#f3cf94",55)
+            draw.line((x+373,y+17,x+373,y+104),fill="#41433d",width=1)
             stats=player.get("_match_stats",{})
+            for number,(caption,key,color) in enumerate((
+                ("УБИЙСТВА","Kills","#c8edcd"),
+                ("СМЕРТИ","Deaths","#ecb9ac"),
+                ("ПОМОЩИ","Assists","#e5d6ad"),
+            )):
+                center=x+420+number*84
+                text(caption,(center,y+19),10,"#aeb7bb",80,True)
+                text(stats.get(key,"—"),(center,y+39),29,color,78,True)
             if stats:
-                line="У/С/П "+" / ".join(str(stats.get(key,"—")) for key in ("Kills","Deaths","Assists"))
-                text(line,(x+115,y+73),17,"#eff1f2",500)
-                text("Урон/раунд "+str(stats.get("ADR","—"))+" · HS "+str(stats.get("Headshots %","—"))+"%",(x+115,y+98),14,"#b1bdcc",500)
+                adr=stats.get("ADR","—")
+                hs=str(stats.get("Headshots %","—")).rstrip("%")
+                text(f"Урон/раунд {adr} · HS {hs}%",(x+394,y+88),12,"#b8c2ca",235)
             else:
-                text("Профиль · K/D "+str(info.get("kd","—"))+" · HS "+str(info.get("hs","—"))+"%",(x+115,y+77),16,"#b1bdcc",500)
+                kd=info.get("kd","—")
+                hs=str(info.get("hs","—")).rstrip("%")
+                text(f"Профиль K/D {kd} · HS {hs}%",(x+394,y+88),12,"#b8c2ca",235)
     if not teams:
         text(embed.title,(56,420),28,width=1300)
         for index,field in enumerate(embed.fields[:4]):
