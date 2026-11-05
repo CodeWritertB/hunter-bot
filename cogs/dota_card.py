@@ -20,7 +20,16 @@ def constants(name):
 
 @lru_cache(maxsize=256)
 def icon(path):
-    url = "https://cdn.cloudflare.steamstatic.com" + path
+    if not path:
+        return None
+    if path.startswith("https://"):
+        from urllib.parse import urlparse
+        host = urlparse(path).hostname or ""
+        if not (host.endswith(".steamstatic.com") or host.endswith(".steamcdn-a.akamaihd.net")):
+            return None
+        url = path
+    else:
+        url = "https://cdn.cloudflare.steamstatic.com" + path
     try:
         with urllib.request.urlopen(url, timeout=5) as response:
             payload = response.read(2000000)
@@ -38,6 +47,8 @@ def load_assets(players):
     paths = {items[key]["img"] for key in items if items[key].get("img") and
              items[key].get("dname") in {"Aghanim's Shard", "Aghanim's Blessing", "Moon Shard"}}
     for player in players:
+        if player.get("steam_avatar"):
+            paths.add(player["steam_avatar"])
         hero = heroes.get(str(player.get("hero_id", 0)), {})
         if hero.get("img"):
             paths.add(hero["img"])
@@ -47,6 +58,10 @@ def load_assets(players):
             if item.get("img"):
                 paths.add(item["img"])
         neutral = items.get(player.get("item_neutral"), {})
+        if not neutral:
+            history = player.get("neutral_item_history") or []
+            latest = max(history, key=lambda entry: entry.get("time", 0), default={})
+            neutral = next((item for item in items.values() if item.get("img", "").endswith("/" + latest.get("item_neutral", "__missing__") + ".png")), {})
         if neutral.get("img"):
             paths.add(neutral["img"])
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -203,7 +218,8 @@ def render_card(embed, guild, match_data=None, players_info=None, public_profile
             name = (linked or player).get("mention") or player.get("personaname") or hero.get("localized_name", "Игрок")
             server = bool(linked)
             dotabuff = bool((public_profiles or {}).get(int(account or 0)))
-            portrait(hero.get("img"), (left + 14, y + 18, left + 100, y + 70), server, dotabuff)
+            portrait(player.get("steam_avatar"), (left + 24, y + 15, left + 88, y + 79), server, dotabuff)
+            portrait(hero.get("img"), (left + 14, y + 106, left + 100, y + 158), server, dotabuff)
             player_name(name, (left + 112, y + 12), server, dotabuff)
             label(hero.get("localized_name", "Герой"), (left + 112, y + 45), 16, "#c5bba7", 286)
             label("У / С / П   " + " / ".join(str(player.get(key, "—")) for key in ("kills", "deaths", "assists")),
@@ -213,10 +229,23 @@ def render_card(embed, guild, match_data=None, players_info=None, public_profile
             for number, (caption, key) in enumerate(stats):
                 value = player.get(key)
                 value = f"{value:,}".replace(",", " ") if isinstance(value, (int, float)) else "—"
-                label(caption + "   " + value, (left + 112, y + 106 + number * 17), 13, "#c2c2b4", 292)
-            paste(items.get(player.get("item_neutral"), {}).get("img"),
-                  (left + 22, y + 110, left + 86, y + 156))
-            label("Нейтр.", (left + 22, y + 164), 12, "#a9a697", 80)
+                label(caption + "   " + value, (left + 112, y + 106 + number * 17), 13, "#c2c2b4", 210)
+            history = player.get("neutral_item_history") or []
+            latest = max(history, key=lambda entry: entry.get("time", 0), default={})
+            def named_item(key):
+                return next((item for item in items.values() if item.get("img", "").endswith("/" + key + ".png")), {})
+            neutral = items.get(player.get("item_neutral"), {}) or named_item(latest.get("item_neutral", "__missing__"))
+            enhancement = named_item(latest.get("item_neutral_enhancement", "__missing__"))
+            paste(neutral.get("img"), (left + 337, y + 80, left + 411, y + 132))
+            label("Нейтральный", (left + 334, y + 139), 10, "#b8af97", 86)
+            label(enhancement.get("dname", "Свойства —"), (left + 334, y + 155), 10, "#e7cc95", 86)
+            attributes = enhancement.get("attrib") or neutral.get("attrib") or []
+            for number, attribute in enumerate(attributes[:2]):
+                names = {"cast_range_bonus": "Дальность", "bonus_mana_regen": "Мана/с", "bonus_health": "Здоровье", "bonus_mana": "Мана", "bonus_damage": "Урон", "bonus_armor": "Броня", "bonus_attack_speed": "Скор. атаки", "bonus_movement_speed": "Скорость", "bonus_strength": "Сила", "bonus_agility": "Ловкость", "bonus_intellect": "Интеллект", "bonus_all_stats": "Атрибуты", "bonus_health_regen": "Здоровье/с"}
+                caption = names.get(attribute.get("key"), attribute.get("header") or "Бонус")
+                text = str(caption) + " " + str(attribute.get("value", ""))
+                text = re.sub("<[^>]*>", "", text)
+                label(text, (left + 334, y + 170 + number * 12), 9, "#aaa895", 86)
             buffs = {entry.get("permanent_buff"): entry.get("stack_count", 1) for entry in player.get("permanent_buffs", [])}
             owned_scepter = any(items.get(player.get("item_" + str(slot)), {}).get("dname") == "Aghanim's Scepter" for slot in range(6))
             upgrades = [("Aghanim's Shard", player.get("aghanims_shard") or buffs.get(12)),

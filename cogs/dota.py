@@ -371,8 +371,22 @@ def match_links(guild, match_id, players_info):
 async def match_card(embed, guild, match_data=None, players_info=None):
     from cogs.dota_card import render_card
     from cogs.dotabuff_status import statuses
-    public = await statuses((match_data or {}).get("players") or players_info or [])
-    buffer = await asyncio.to_thread(render_card, embed, guild, match_data, players_info, public)
+    roster = (match_data or {}).get("players") or players_info or []
+    public = await statuses(roster)
+    enriched = [dict(player) for player in roster]
+    ids = [str(int(player.get("account_id", player.get("steam32"))) + 76561197960265728)
+           for player in roster if player.get("account_id", player.get("steam32"))]
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as session:
+            profiles = await get_steam_profiles_batch(session, ids)
+        for player in enriched:
+            account = player.get("account_id", player.get("steam32"))
+            profile = profiles.get(str(int(account) + 76561197960265728), {}) if account else {}
+            player["steam_avatar"] = profile.get("avatarmedium") or profile.get("avatarfull")
+    except (aiohttp.ClientError, TimeoutError, ValueError):
+        log.warning("Steam-аватары временно недоступны")
+    enriched_match = dict(match_data, players=enriched) if match_data else None
+    buffer = await asyncio.to_thread(render_card, embed, guild, enriched_match, players_info if match_data else enriched, public)
     image_embed = disnake.Embed(url=embed.url, color=embed.color)
     image_embed.set_image(url="attachment://dota-match.png")
     return image_embed, disnake.File(buffer, filename="dota-match.png")
